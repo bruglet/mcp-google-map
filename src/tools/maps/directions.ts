@@ -15,7 +15,10 @@ const SCHEMA = {
     .describe("Travel mode for directions"),
   departure_time: z.string().optional().describe("Departure time (ISO string format)"),
   arrival_time: z.string().optional().describe("Arrival time (ISO string format)"),
-  avoid_tolls: z.boolean().optional().describe('Avoid toll roads where reasonable. Only supported with mode "driving".'),
+  avoid_tolls: z
+    .boolean()
+    .optional()
+    .describe('Avoid toll roads where reasonable. Only supported with mode "driving".'),
   avoid_highways: z
     .boolean()
     .optional()

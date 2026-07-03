@@ -19,7 +19,10 @@ const SCHEMA = {
     .describe(
       "Departure time in ISO 8601 format (e.g. 2026-03-21T09:00:00Z). Enables traffic-aware duration estimates."
     ),
-  avoid_tolls: z.boolean().optional().describe('Avoid toll roads where reasonable. Only supported with mode "driving".'),
+  avoid_tolls: z
+    .boolean()
+    .optional()
+    .describe('Avoid toll roads where reasonable. Only supported with mode "driving".'),
   avoid_highways: z
     .boolean()
     .optional()

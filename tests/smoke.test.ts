@@ -1136,9 +1136,7 @@ async function testTransitDetailsField(session: McpSession): Promise<void> {
   const transitStep = steps.find((s: any) => s.transitDetails);
   if (!transitStep) {
     // Routes API may rarely return a walking-only itinerary; warn but don't flaky-fail.
-    console.log(
-      "  ⚠️  No transit step in this itinerary — field mask correctness cannot be asserted this run"
-    );
+    console.log("  ⚠️  No transit step in this itinerary — field mask correctness cannot be asserted this run");
     return;
   }
 
