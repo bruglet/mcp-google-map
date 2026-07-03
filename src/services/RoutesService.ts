@@ -25,6 +25,7 @@ const COMPUTE_ROUTES_FIELD_MASK = [
   "routes.legs.steps.staticDuration",
   "routes.legs.steps.startLocation",
   "routes.legs.steps.endLocation",
+  "routes.legs.steps.transitDetails",
   "routes.legs.polyline",
   "routes.optimizedIntermediateWaypointIndex",
 ].join(",");

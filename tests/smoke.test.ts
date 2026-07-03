@@ -1103,6 +1103,53 @@ async function testTransitErrorMessages(session: McpSession): Promise<void> {
   }
 }
 
+async function testTransitDetailsField(session: McpSession): Promise<void> {
+  if (!API_KEY) {
+    console.log("  ⏭️  Skipped transitDetails test (no GOOGLE_MAPS_API_KEY)");
+    return;
+  }
+
+  console.log("\n🔍 Testing transit step includes transitDetails (field mask)...");
+
+  // Dublin Airport → city centre: virtually always returns a bus step (issue #78 scope).
+  const result = await sendRequest(session, "tools/call", {
+    name: "maps_directions",
+    arguments: {
+      origin: "Dublin Airport, Ireland",
+      destination: "Trinity College Dublin, Ireland",
+      mode: "transit",
+    },
+  });
+  const content = result?.result?.content ?? [];
+  assert(content.length > 0, "Transit directions in Dublin returns content");
+  if (content.length === 0) return;
+
+  const text = content[0]?.text ?? "";
+  const isError = result?.result?.isError === true;
+  assert(!isError, `Transit directions in Dublin should succeed, got error: ${text.slice(0, 200)}`);
+  if (isError) return;
+
+  const parsed = JSON.parse(text);
+  const steps: any[] = parsed?.routes?.[0]?.legs?.flatMap((l: any) => l.steps ?? []) ?? [];
+  assert(steps.length > 0, "Transit response has at least one step");
+
+  const transitStep = steps.find((s: any) => s.transitDetails);
+  if (!transitStep) {
+    // Routes API may rarely return a walking-only itinerary; warn but don't flaky-fail.
+    console.log(
+      "  ⚠️  No transit step in this itinerary — field mask correctness cannot be asserted this run"
+    );
+    return;
+  }
+
+  const td = transitStep.transitDetails;
+  assert(
+    td?.transitLine || td?.stopDetails,
+    "transitDetails contains structured transit metadata (transitLine or stopDetails)",
+    `got: ${JSON.stringify(td).slice(0, 200)}`
+  );
+}
+
 // --------------- Main ---------------
 
 async function main() {
@@ -1127,6 +1174,7 @@ async function main() {
     await testToolCalls(session);
     await testPlaceDetailsPhotos(session);
     await testTransitErrorMessages(session);
+    await testTransitDetailsField(session);
     await testMultiSession();
   } catch (err) {
     console.error("\n💥 Fatal error:", err);
