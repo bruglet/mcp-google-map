@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createDirectionsUrl, createPlaceUrl } from "../src/services/mapsUrlService.js";
 import { locationInputToString, normalizeLocation } from "../src/services/location.js";
-import { extractIndexedPlaceIds } from "../src/services/GroundingLiteService.js";
+import { GroundingLiteService, extractIndexedPlaceIds } from "../src/services/GroundingLiteService.js";
 import serverConfigs, { filterTools } from "../src/config.js";
 
 test("Maps URL generation is local and uses api=1", () => {
@@ -50,6 +50,26 @@ test("Grounding resolver identities preserve input-index correspondence on mixed
     "entities"
   );
   assert.deepEqual(values, ["first", undefined, "third"]);
+});
+
+test("Grounding Lite prefers its dedicated server-side key", () => {
+  const originalGroundingKey = process.env.GOOGLE_MAPS_GROUNDING_API_KEY;
+  const originalMapsKey = process.env.GOOGLE_MAPS_API_KEY;
+  const originalTermsAck = process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK;
+  try {
+    process.env.GOOGLE_MAPS_GROUNDING_API_KEY = "grounding-key";
+    process.env.GOOGLE_MAPS_API_KEY = "main-maps-key";
+    process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK = "true";
+    const service = new GroundingLiteService("request-context-key") as unknown as { apiKey: string };
+    assert.equal(service.apiKey, "grounding-key");
+  } finally {
+    if (originalGroundingKey === undefined) delete process.env.GOOGLE_MAPS_GROUNDING_API_KEY;
+    else process.env.GOOGLE_MAPS_GROUNDING_API_KEY = originalGroundingKey;
+    if (originalMapsKey === undefined) delete process.env.GOOGLE_MAPS_API_KEY;
+    else process.env.GOOGLE_MAPS_API_KEY = originalMapsKey;
+    if (originalTermsAck === undefined) delete process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK;
+    else process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK = originalTermsAck;
+  }
 });
 
 test("tool filtering fails closed for empty or unknown profiles", () => {

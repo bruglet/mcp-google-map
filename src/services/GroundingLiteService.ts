@@ -9,7 +9,7 @@ export class GroundingLiteService {
   private readonly apiKey: string;
 
   constructor(apiKey?: string) {
-    this.apiKey = apiKey || process.env.GOOGLE_MAPS_GROUNDING_API_KEY || process.env.GOOGLE_MAPS_API_KEY || "";
+    this.apiKey = process.env.GOOGLE_MAPS_GROUNDING_API_KEY || apiKey || process.env.GOOGLE_MAPS_API_KEY || "";
     if (!this.apiKey) throw new Error("Google Maps API Key is required for Grounding Lite");
     if (process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK !== "true") {
       throw new Error(
