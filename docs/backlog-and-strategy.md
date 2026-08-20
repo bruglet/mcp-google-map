@@ -1,5 +1,10 @@
 # mcp-google-map Backlog & Strategy
 
+> Historical upstream planning reference only. This file describes a superseded
+> v0.x tool set and is not the current fork contract. Use `README.md`,
+> `docs/ARCHITECTURE.md`, `docs/COST_POLICY.md`, `docs/DEPLOYMENT.md`, and
+> `UPSTREAM_DEVIATIONS.md` for the active fork behavior.
+
 > Consolidated: 2026-03-20
 > Source: dev-roadmap-spec.md, strategy-todo.md, mcp-google-map-growth-strategy-2026.md (all retired)
 > Current state: v0.0.44, 17 tools, ~192+ GitHub stars
