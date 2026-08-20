@@ -195,6 +195,9 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/bruglet/mcp-google-map
             org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.title=bruglet/mcp-google-map
+            org.opencontainers.image.description=Cost-conscious Google Maps MCP with server-side credentials and rootless deployment
             io.github.bruglet.upstream-base-commit=be966cc
 
       - name: Build and publish amd64/arm64 images
@@ -222,7 +225,10 @@ jobs:
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
 
-      - name: Make GHCR package public
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh api --method PATCH /user/packages/container/mcp-google-map -f visibility=public
+      - name: Verify anonymous GHCR pull
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --retry 3 \
+            -H 'Accept: application/vnd.oci.image.index.v1+json' \
+            https://ghcr.io/v2/bruglet/mcp-google-map/manifests/main \
+            >/dev/null
