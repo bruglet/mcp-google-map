@@ -36,7 +36,11 @@ async function ACTION(params: OptimizeTransitErrandsParams): Promise<{ content: 
     const resolvedLocations = await locationInputsToStrings(
       locationInputs,
       locationInputs.some((location) => location.kind === "maps_url")
-        ? (urls) => new GroundingLiteService(getCurrentApiKey()).resolveMapsUrlsToPlaceIds(urls)
+        ? (urls) =>
+            new GroundingLiteService(getCurrentApiKey()).resolveMapsUrlsToPlaceIds(
+              urls,
+              "maps_optimize_transit_errands"
+            )
         : undefined
     );
     let resolvedIndex = 0;

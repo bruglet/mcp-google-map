@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createDirectionsUrl, createPlaceUrl } from "../src/services/mapsUrlService.js";
-import { locationInputToString, normalizeLocation } from "../src/services/location.js";
+import { locationInputToString, locationInputsToStrings, normalizeLocation } from "../src/services/location.js";
 import { GroundingLiteService, extractIndexedPlaceIds } from "../src/services/GroundingLiteService.js";
 import serverConfigs, { filterTools } from "../src/config.js";
 
@@ -37,6 +37,24 @@ test("structured locations stay local until a resolver is explicitly selected", 
     normalizeLocation({ kind: "maps_url", value: "https://maps.app.goo.gl/example" }).resolutionSource,
     "input"
   );
+});
+
+test("request-scoped Maps URL resolution deduplicates repeated URLs", async () => {
+  const calls: string[][] = [];
+  const repeated = "https://maps.app.goo.gl/example";
+  const resolved = await locationInputsToStrings(
+    [
+      { kind: "maps_url", value: repeated },
+      { kind: "query", value: "Somewhere" },
+      { kind: "maps_url", value: repeated },
+    ],
+    async (urls) => {
+      calls.push(urls);
+      return ["place-id"];
+    }
+  );
+  assert.deepEqual(calls, [[repeated]]);
+  assert.deepEqual(resolved, ["place_id:place-id", "Somewhere", "place_id:place-id"]);
 });
 
 test("Grounding resolver identities preserve input-index correspondence on mixed failures", () => {
@@ -78,7 +96,7 @@ test("tool filtering fails closed for empty or unknown profiles", () => {
     process.env.GOOGLE_MAPS_ENABLED_TOOLS = "does_not_exist";
     assert.throws(() => filterTools(serverConfigs[0].tools), /Unknown tools/);
     process.env.GOOGLE_MAPS_ENABLED_TOOLS = "";
-    assert.equal(filterTools(serverConfigs[0].tools).length, serverConfigs[0].tools.length);
+    assert.throws(() => filterTools(serverConfigs[0].tools), /cannot be empty/);
   } finally {
     if (original === undefined) delete process.env.GOOGLE_MAPS_ENABLED_TOOLS;
     else process.env.GOOGLE_MAPS_ENABLED_TOOLS = original;

@@ -1,4 +1,4 @@
-import { CostTier } from "./costPolicy.js";
+import { CostTier, expectedSku } from "./costPolicy.js";
 import { usageLedger, UsageEvent } from "./usageLedger.js";
 
 export interface RequestMetadata extends UsageEvent {
@@ -16,7 +16,7 @@ export async function recordRequest(metadata: RequestMetadata): Promise<void> {
     ...metadata,
     endpoint: metadata.endpoint ?? defaultEndpoint(metadata.api, metadata.operation),
     projectedUnits: metadata.projectedUnits ?? metadata.units,
-    sku: metadata.sku ?? `${metadata.api}:${metadata.operation}`,
+    sku: metadata.sku ?? expectedSku(metadata.api, metadata.operation, metadata.tier),
     actualResult: metadata.actualResult ?? "started",
   };
   console.error(`[COST] ${JSON.stringify(event)}`);

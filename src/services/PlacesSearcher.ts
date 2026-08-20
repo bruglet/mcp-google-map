@@ -2,7 +2,13 @@ import { GoogleMapsTools } from "./toolclass.js";
 import { NewPlacesService } from "./NewPlacesService.js";
 import { RoutesService, parseDuration, formatDistance, formatDuration } from "./RoutesService.js";
 import { createPlaceUrl, createDirectionsUrl } from "./mapsUrlService.js";
-import { PlaceFieldGroup } from "./costPolicy.js";
+import {
+  buildPlaceFieldMask,
+  DEFAULT_PLACE_GROUPS,
+  PlaceFieldGroup,
+  plannerLimits,
+  tierAtLeast,
+} from "./costPolicy.js";
 import { TransitItineraryService } from "./TransitItineraryService.js";
 
 interface SearchResponse {
@@ -108,6 +114,7 @@ export class PlacesSearcher {
   private mapsTools: GoogleMapsTools;
   private newPlacesService: NewPlacesService;
   private routesService: RoutesService;
+  private readonly placeDetailsCache = new Map<string, Promise<PlaceDetailsResponse>>();
 
   constructor(apiKey?: string) {
     this.mapsTools = new GoogleMapsTools(apiKey);
@@ -121,15 +128,17 @@ export class PlacesSearcher {
     radius?: number;
     openNow?: boolean;
     minRating?: number;
+    parentTool?: string;
   }): Promise<SearchResponse> {
     try {
-      const location = await this.mapsTools.getLocation(params.center);
+      const location = await this.mapsTools.getLocation(params.center, params.parentTool);
       const places = await this.newPlacesService.searchNearby({
         location,
         keyword: params.keyword,
         radius: params.radius,
         openNow: params.openNow,
         minRating: params.minRating,
+        parentTool: params.parentTool,
       });
 
       return {
@@ -167,6 +176,7 @@ export class PlacesSearcher {
     openNow?: boolean;
     minRating?: number;
     includedType?: string;
+    parentTool?: string;
   }): Promise<SearchResponse> {
     try {
       const places = await this.newPlacesService.searchText({
@@ -181,6 +191,7 @@ export class PlacesSearcher {
         openNow: params.openNow,
         minRating: params.minRating,
         includedType: params.includedType,
+        parentTool: params.parentTool,
       });
 
       return {
@@ -211,65 +222,77 @@ export class PlacesSearcher {
     }
   }
 
-  async getPlaceDetails(placeId: string, include: PlaceFieldGroup[] = []): Promise<PlaceDetailsResponse> {
-    try {
-      const details = await this.newPlacesService.getPlaceDetails(placeId, include);
+  async getPlaceDetails(
+    placeId: string,
+    include: PlaceFieldGroup[] = [],
+    parentTool?: string
+  ): Promise<PlaceDetailsResponse> {
+    const cacheKey = `${placeId}\u0000${[...new Set(include)].sort().join(",")}`;
+    const cached = this.placeDetailsCache.get(cacheKey);
+    if (cached) return cached;
 
-      return {
-        success: true,
-        data: {
-          name: details.name,
-          address: details.formatted_address,
-          location: details.geometry?.location,
-          primary_type: details.primary_type || null,
-          types: details.types || [],
-          ...(details.rating !== undefined ? { rating: details.rating } : {}),
-          ...(details.user_ratings_total !== undefined ? { total_ratings: details.user_ratings_total } : {}),
-          ...(details.opening_hours ? { opening_hours: details.opening_hours } : {}),
-          ...(details.formatted_phone_number ? { phone: details.formatted_phone_number } : {}),
-          ...(details.website ? { website: details.website } : {}),
-          ...(details.price_level !== undefined ? { price_level: details.price_level } : {}),
-          ...(details.editorial_summary ? { editorial_summary: details.editorial_summary } : {}),
-          ...(details.parking ? { parking: details.parking } : {}),
-          ...(details.accessibility ? { accessibility: details.accessibility } : {}),
-          ...(details.dining_options ? { dining_options: details.dining_options } : {}),
-          ...(details.serves ? { serves: details.serves } : {}),
-          ...(details.atmosphere ? { atmosphere: details.atmosphere } : {}),
-          ...(details.payment_options ? { payment_options: details.payment_options } : {}),
-          ...(details.review_summary ? { review_summary: details.review_summary } : {}),
-          ...(details.generative_summary ? { generative_summary: details.generative_summary } : {}),
-          ...(details.reviews
-            ? {
-                reviews: details.reviews.map((review: any) => ({
-                  rating: review.rating,
-                  text: review.text,
-                  language: review.language || null,
-                  time: review.time,
-                  author_name: review.author_name,
-                })),
-              }
-            : {}),
-          google_maps_url: createPlaceUrl({
-            label: details.name,
+    const request = (async () => {
+      try {
+        const details = await this.newPlacesService.getPlaceDetails(placeId, include, parentTool);
+
+        return {
+          success: true,
+          data: {
+            name: details.name,
             address: details.formatted_address,
-            placeId: details.place_id,
-            coordinates: details.geometry?.location
-              ? { latitude: details.geometry.location.lat, longitude: details.geometry.location.lng }
-              : undefined,
-          }),
-        },
-      };
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : "An error occurred while getting place details",
-      };
-    }
+            location: details.geometry?.location,
+            primary_type: details.primary_type || null,
+            types: details.types || [],
+            ...(details.rating !== undefined ? { rating: details.rating } : {}),
+            ...(details.user_ratings_total !== undefined ? { total_ratings: details.user_ratings_total } : {}),
+            ...(details.opening_hours ? { opening_hours: details.opening_hours } : {}),
+            ...(details.formatted_phone_number ? { phone: details.formatted_phone_number } : {}),
+            ...(details.website ? { website: details.website } : {}),
+            ...(details.price_level !== undefined ? { price_level: details.price_level } : {}),
+            ...(details.editorial_summary ? { editorial_summary: details.editorial_summary } : {}),
+            ...(details.parking ? { parking: details.parking } : {}),
+            ...(details.accessibility ? { accessibility: details.accessibility } : {}),
+            ...(details.dining_options ? { dining_options: details.dining_options } : {}),
+            ...(details.serves ? { serves: details.serves } : {}),
+            ...(details.atmosphere ? { atmosphere: details.atmosphere } : {}),
+            ...(details.payment_options ? { payment_options: details.payment_options } : {}),
+            ...(details.review_summary ? { review_summary: details.review_summary } : {}),
+            ...(details.generative_summary ? { generative_summary: details.generative_summary } : {}),
+            ...(details.reviews
+              ? {
+                  reviews: details.reviews.map((review: any) => ({
+                    rating: review.rating,
+                    text: review.text,
+                    language: review.language || null,
+                    time: review.time,
+                    author_name: review.author_name,
+                  })),
+                }
+              : {}),
+            google_maps_url: createPlaceUrl({
+              label: details.name,
+              address: details.formatted_address,
+              placeId: details.place_id,
+              coordinates: details.geometry?.location
+                ? { latitude: details.geometry.location.lat, longitude: details.geometry.location.lng }
+                : undefined,
+            }),
+          },
+        };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : "An error occurred while getting place details",
+        };
+      }
+    })();
+    this.placeDetailsCache.set(cacheKey, request);
+    return request;
   }
 
-  async geocode(address: string): Promise<GeocodeResponse> {
+  async geocode(address: string, parentTool?: string): Promise<GeocodeResponse> {
     try {
-      const result = await this.mapsTools.geocode(address);
+      const result = await this.mapsTools.geocode(address, parentTool);
 
       return {
         success: true,
@@ -308,7 +331,8 @@ export class PlacesSearcher {
     avoid_highways?: boolean,
     traffic: "none" | "aware" | "optimal" = "none",
     transit_modes?: Array<"BUS" | "SUBWAY" | "TRAIN" | "LIGHT_RAIL" | "RAIL">,
-    transit_preference?: "LESS_WALKING" | "FEWER_TRANSFERS"
+    transit_preference?: "LESS_WALKING" | "FEWER_TRANSFERS",
+    parentTool?: string
   ): Promise<DistanceMatrixResponse> {
     try {
       const result = await this.routesService.computeRouteMatrix({
@@ -321,6 +345,7 @@ export class PlacesSearcher {
         traffic,
         transitModes: transit_modes,
         transitPreference: transit_preference,
+        parentTool,
       });
 
       return {
@@ -347,7 +372,8 @@ export class PlacesSearcher {
     alternatives = false,
     detail_level: "summary" | "steps" | "geometry" | "full" = "summary",
     transit_modes?: Array<"BUS" | "SUBWAY" | "TRAIN" | "LIGHT_RAIL" | "RAIL">,
-    transit_preference?: "LESS_WALKING" | "FEWER_TRANSFERS"
+    transit_preference?: "LESS_WALKING" | "FEWER_TRANSFERS",
+    parentTool?: string
   ): Promise<DirectionsResponse> {
     try {
       const departureTime = departure_time ? new Date(departure_time) : undefined;
@@ -365,6 +391,7 @@ export class PlacesSearcher {
         detailLevel: detail_level,
         transitModes: transit_modes,
         transitPreference: transit_preference,
+        parentTool,
       });
 
       const destinationUrl = createDirectionsUrl({
@@ -463,6 +490,7 @@ export class PlacesSearcher {
     destination: string;
     mode?: string;
     maxResults?: number;
+    parentTool?: string;
   }): Promise<{ success: boolean; error?: string; data?: any }> {
     try {
       const result = await this.mapsTools.searchAlongRoute(params);
@@ -484,15 +512,25 @@ export class PlacesSearcher {
     topN?: number;
     enrich_top_n?: number;
     include?: PlaceFieldGroup[];
+    planner_mode?: "conservative" | "thorough";
   }): Promise<any> {
     // "tourist_attraction" is the Places API (New) type name; a bare
     // "attraction" is rejected with INVALID_ARGUMENT: Unsupported types.
-    const types = params.types || ["restaurant", "cafe", "tourist_attraction"];
+    const types = [...new Set(params.types || ["restaurant", "cafe", "tourist_attraction"])];
     const radius = params.radius || 1000;
-    const topN = params.enrich_top_n ?? params.topN ?? 0;
+    const mode = params.planner_mode || "conservative";
+    const limits = plannerLimits(mode);
+    const include = params.include || [];
+    const enrichmentTier = buildPlaceFieldMask([...DEFAULT_PLACE_GROUPS, ...include]).tier;
+    const requestedTopN = params.enrich_top_n ?? params.topN ?? 0;
+    const topN = include.length ? Math.min(requestedTopN, limits.candidatesPerGroup) : 0;
+    if (tierAtLeast(enrichmentTier, "T3") && topN * types.length > limits.highTierEnrichments)
+      throw new Error(
+        `Area exploration projects ${topN * types.length} high-tier Place enrichments; the ${mode} planner limit is ${limits.highTierEnrichments}.`
+      );
 
     // 1. Geocode
-    const geo = await this.geocode(params.location);
+    const geo = await this.geocode(params.location, "maps_explore_area");
     if (!geo.success || !geo.data) throw new Error(geo.error || "Geocode failed");
     const { lat, lng } = geo.data.location;
 
@@ -503,15 +541,17 @@ export class PlacesSearcher {
         center: { value: `${lat},${lng}`, isCoordinates: true },
         keyword: type,
         radius,
+        parentTool: "maps_explore_area",
       });
       if (!search.success || !search.data) continue;
 
       // 3. Get details for top N
-      const topPlaces = search.data.slice(0, topN);
+      const candidates = search.data.slice(0, limits.candidatesPerGroup);
+      const topPlaces = candidates.slice(0, topN);
       const detailed = [];
       for (const place of topPlaces) {
         if (!place.place_id) continue;
-        const details = await this.getPlaceDetails(place.place_id, params.include || []);
+        const details = await this.getPlaceDetails(place.place_id, include, "maps_explore_area");
         detailed.push({
           name: place.name,
           address: place.address,
@@ -522,7 +562,7 @@ export class PlacesSearcher {
           website: details.data?.website,
         });
       }
-      categories.push({ type, count: search.data.length, top: detailed });
+      categories.push({ type, count: candidates.length, top: detailed });
     }
 
     return {
@@ -542,38 +582,39 @@ export class PlacesSearcher {
     departure_time?: string;
     avoid_tolls?: boolean;
     avoid_highways?: boolean;
+    planner_mode?: "conservative" | "thorough";
   }): Promise<any> {
     const mode = params.mode || "driving";
     const stops = params.stops;
     if (stops.length < 2) throw new Error("Need at least 2 stops");
+    const plannerMode = params.planner_mode || "conservative";
+    const limits = plannerLimits(plannerMode);
+    if (stops.length - 2 > limits.fixedStops)
+      throw new Error(
+        `This route has ${stops.length - 2} intermediate stops; the ${plannerMode} planner limit is ${limits.fixedStops}.`
+      );
 
     if (mode === "transit") {
       const itinerary = await new TransitItineraryService(this.routesService).routeFixedPath({
         locations: stops,
         departureTime: params.departure_time ? new Date(params.departure_time) : undefined,
+        plannerMode,
+        parentTool: "maps_plan_route",
       });
       return { success: true, data: itinerary };
     }
 
-    // 1. Geocode all stops for display addresses
-    const geocoded: Array<{ originalName: string; address: string; lat: number; lng: number }> = [];
-    for (const stop of stops) {
-      const geo = await this.geocode(stop);
-      if (!geo.success || !geo.data) throw new Error(`Failed to geocode: ${stop}`);
-      geocoded.push({
-        originalName: stop,
-        address: geo.data.formatted_address,
-        lat: geo.data.location.lat,
-        lng: geo.data.location.lng,
-      });
-    }
+    // Routes accepts addresses, coordinates, and Place IDs directly. Keep the
+    // caller's values so planning does not spend a geocoding request only to
+    // display a second spelling of the same stop.
+    const stopsForOutput = stops.map((stop) => ({ originalName: stop, address: stop }));
 
-    // 2. Single Routes API call handles optimization + all leg directions
+    // Single Routes API call handles optional optimization + all leg directions
     const origin = stops[0];
     const destination = stops[stops.length - 1];
     const intermediates = stops.length > 2 ? stops.slice(1, -1) : undefined;
-    // Optimize if requested, > 2 stops, and not transit (transit doesn't support intermediates for optimization)
-    const shouldOptimize = params.optimize !== false && stops.length > 2;
+    // Waypoint ordering is a higher-tier Routes option and is opt-in.
+    const shouldOptimize = params.optimize === true && stops.length > 2;
 
     const routeResult = await this.routesService.computeRoutes({
       origin,
@@ -581,6 +622,7 @@ export class PlacesSearcher {
       mode,
       intermediates,
       optimizeWaypointOrder: shouldOptimize,
+      parentTool: "maps_plan_route",
       ...(params.departure_time ? { departureTime: new Date(params.departure_time) } : {}),
       ...(params.avoid_tolls !== undefined ? { avoidTolls: params.avoid_tolls } : {}),
       ...(params.avoid_highways !== undefined ? { avoidHighways: params.avoid_highways } : {}),
@@ -590,17 +632,17 @@ export class PlacesSearcher {
     const routeLegs = route?.legs || [];
 
     // 3. Determine ordered stops based on optimization result
-    let orderedStops: typeof geocoded;
+    let orderedStops: typeof stopsForOutput;
     if (shouldOptimize && routeResult.optimizedIntermediateWaypointIndex) {
       const optimizedOrder = routeResult.optimizedIntermediateWaypointIndex;
-      const intermediateGeocoded = geocoded.slice(1, -1);
+      const intermediateStops = stopsForOutput.slice(1, -1);
       orderedStops = [
-        geocoded[0],
-        ...optimizedOrder.map((i: number) => intermediateGeocoded[i]),
-        geocoded[geocoded.length - 1],
+        stopsForOutput[0],
+        ...optimizedOrder.map((i: number) => intermediateStops[i]),
+        stopsForOutput[stopsForOutput.length - 1],
       ];
     } else {
-      orderedStops = geocoded;
+      orderedStops = stopsForOutput;
     }
 
     // 4. Build legs from Routes API response
@@ -651,20 +693,29 @@ export class PlacesSearcher {
     limit?: number;
     mode?: "driving" | "walking" | "bicycling" | "transit";
     include?: PlaceFieldGroup[];
+    planner_mode?: "conservative" | "thorough";
   }): Promise<any> {
-    const limit = params.limit || 5;
+    const mode = params.planner_mode || "conservative";
+    const limits = plannerLimits(mode);
+    const limit = Math.min(params.limit || 5, limits.candidatesPerGroup);
+    const include = params.include || [];
+    const enrichmentTier = buildPlaceFieldMask([...DEFAULT_PLACE_GROUPS, ...include]).tier;
+    if (tierAtLeast(enrichmentTier, "T3") && limit > limits.highTierEnrichments)
+      throw new Error(
+        `Place comparison projects ${limit} high-tier enrichments; the ${mode} planner limit is ${limits.highTierEnrichments}.`
+      );
 
     // 1. Search
-    const search = await this.searchText({ query: params.query });
+    const search = await this.searchText({ query: params.query, parentTool: "maps_compare_places" });
     if (!search.success || !search.data) throw new Error(search.error || "Search failed");
 
-    const places = search.data.slice(0, limit);
+    const places = deduplicatePlaces(search.data).slice(0, limit);
 
     // 2. Get details for each
     const compared: any[] = [];
     for (const place of places) {
-      const details = params.include?.length
-        ? await this.getPlaceDetails(place.place_id, params.include)
+      const details = include.length
+        ? await this.getPlaceDetails(place.place_id, include, "maps_compare_places")
         : { data: undefined };
       compared.push({
         name: place.name,
@@ -687,7 +738,18 @@ export class PlacesSearcher {
     if (params.userLocation && compared.length > 0) {
       const origin = `${params.userLocation.latitude},${params.userLocation.longitude}`;
       const destinations = places.map((p: any) => `${p.location.lat},${p.location.lng}`);
-      const matrix = await this.calculateDistanceMatrix([origin], destinations, params.mode || "transit");
+      const matrix = await this.calculateDistanceMatrix(
+        [origin],
+        destinations,
+        params.mode || "transit",
+        undefined,
+        undefined,
+        undefined,
+        "none",
+        undefined,
+        undefined,
+        "maps_compare_places"
+      );
       if (matrix.success && matrix.data) {
         for (let i = 0; i < compared.length; i++) {
           compared[i].distance = matrix.data.distances[0]?.[i]?.text;
@@ -878,4 +940,14 @@ export class PlacesSearcher {
       grid: gridResults,
     };
   }
+}
+
+function deduplicatePlaces(places: any[]): any[] {
+  const seen = new Set<string>();
+  return places.filter((place) => {
+    const key = place.place_id || `${place.name}\u0000${place.address}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }

@@ -4,7 +4,7 @@ import { getCurrentApiKey } from "../../utils/requestContext.js";
 
 const NAME = "maps_distance_matrix";
 const DESCRIPTION =
-  "Calculate distances and durations between multiple origins and destinations. Matrix usage is billed per origin×destination element, not per HTTP request; transit and traffic-optimal matrices are limited to 100 elements. Cost: T1-T2 | Fan-out: M/L.";
+  "Calculate distances and durations between multiple origins and destinations. Matrix usage is billed per origin×destination element, not per HTTP request; this direct tool is locally limited to 100 elements, and composite planners may split up to their explicit planner-mode allowance. Cost: T1-T2 | Fan-out: M/L.";
 
 const SCHEMA = {
   origins: z.array(z.string()).describe("List of origin addresses or coordinates"),

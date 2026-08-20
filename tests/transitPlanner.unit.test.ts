@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { RoutesService } from "../src/services/RoutesService.js";
-import { computeBoundedTransitMatrix, TransitItineraryService } from "../src/services/TransitItineraryService.js";
+import {
+  computeBoundedTransitMatrix,
+  computeTargetedTransitMatrix,
+  TransitItineraryService,
+} from "../src/services/TransitItineraryService.js";
 
 test("ordered transit legs propagate arrival plus dwell into the next departure", async () => {
   const initial = new Date("2030-01-01T10:00:00.000Z");
@@ -83,4 +87,63 @@ test("transit planner matrices split into valid requests while preserving elemen
   );
   assert.equal(matrix.durations.length, origins.length);
   assert.equal(matrix.durations[2][39].value, 60);
+});
+
+test("thorough transit matrices split destination batches at the provider limit", async () => {
+  const calls: Array<{ origins: string[]; destinations: string[] }> = [];
+  const fakeRoutes = {
+    computeRouteMatrix: async (params: { origins: string[]; destinations: string[] }) => {
+      calls.push(params);
+      return {
+        distances: params.origins.map(() => params.destinations.map(() => ({ value: 100, text: "100 m" }))),
+        durations: params.origins.map(() => params.destinations.map(() => ({ value: 60, text: "1 min" }))),
+        origin_addresses: params.origins,
+        destination_addresses: params.destinations,
+      };
+    },
+  } as unknown as RoutesService;
+
+  const destinations = Array.from({ length: 120 }, (_, index) => `D${index}`);
+  const matrix = await computeBoundedTransitMatrix(fakeRoutes, { origins: ["A"], destinations }, 300);
+
+  assert.deepEqual(
+    calls.map((call) => call.destinations.length),
+    [100, 20]
+  );
+  assert.equal(matrix.durations[0][119].value, 60);
+});
+
+test("fixed-stop matrix requests include only edges that can occur in an order", async () => {
+  const calls: Array<{ origins: string[]; destinations: string[] }> = [];
+  const fakeRoutes = {
+    computeRouteMatrix: async (params: { origins: string[]; destinations: string[] }) => {
+      calls.push(params);
+      return {
+        distances: params.origins.map(() => params.destinations.map(() => ({ value: 100, text: "100 m" }))),
+        durations: params.origins.map(() => params.destinations.map(() => ({ value: 60, text: "1 min" }))),
+        origin_addresses: params.origins,
+        destination_addresses: params.destinations,
+      };
+    },
+  } as unknown as RoutesService;
+
+  const durations = await computeTargetedTransitMatrix(
+    fakeRoutes,
+    [
+      { origin: "Home", destination: "A" },
+      { origin: "Home", destination: "B" },
+      { origin: "A", destination: "B" },
+      { origin: "B", destination: "A" },
+      { origin: "A", destination: "Home" },
+      { origin: "B", destination: "Home" },
+    ],
+    { parentTool: "maps_plan_transit" },
+    100
+  );
+
+  assert.equal(
+    calls.reduce((sum, call) => sum + call.origins.length * call.destinations.length, 0),
+    6
+  );
+  assert.equal(durations.get("Home\u0000A")?.value, 60);
 });

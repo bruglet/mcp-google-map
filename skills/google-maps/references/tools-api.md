@@ -136,9 +136,10 @@ search and 2-opt. Only finalists are chronologically rerouted in detail.
 ### `maps_find_places_by_transit`
 
 Use `{origin, query, departure_time?, max_minutes?, objective?, planner_mode?}`
-to discover bounded semantic candidates, remove only obvious geographic
-outliers, compute a guarded transit matrix, reroute finalists, and optionally
-enrich only finalists.
+to discover bounded semantic candidates, compute only the guarded transit
+matrix edges needed for ranking, reroute finalists, and optionally enrich only
+finalists. The planner does not geocode an ambiguous origin solely for local
+distance pruning; geographic distance is not treated as a transit metric.
 
 ### `maps_optimize_transit_errands`
 

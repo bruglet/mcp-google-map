@@ -22,7 +22,8 @@ async function ACTION(params: FindPlacesByTransitParams): Promise<{ content: any
     const [origin] = await locationInputsToStrings(
       [params.origin],
       params.origin.kind === "maps_url"
-        ? (urls) => new GroundingLiteService(getCurrentApiKey()).resolveMapsUrlsToPlaceIds(urls)
+        ? (urls) =>
+            new GroundingLiteService(getCurrentApiKey()).resolveMapsUrlsToPlaceIds(urls, "maps_find_places_by_transit")
         : undefined
     );
     const result = await new TransitDiscoveryService(getCurrentApiKey()).findPlacesByTransit({

@@ -116,6 +116,25 @@ const FIELD_TIER: Record<string, CostTier> = {
 
 const TIER_ORDER: CostTier[] = ["T0", "T1", "T2", "T3", "T4"];
 
+const REQUEST_SKUS: Record<string, string> = {
+  "places:searchNearby:T2": "Places API Nearby Search Pro",
+  "places:searchText:T2": "Places API Text Search Pro",
+  "places:searchAlongRoute:T2": "Places API Text Search Pro",
+  "places:getPlaceDetails:T2": "Places API Place Details Pro",
+  "places:getPlaceDetails:T3": "Places API Place Details Enterprise",
+  "places:getPlaceDetails:T4": "Places API Place Details Enterprise + Atmosphere",
+  "routes:computeRoutes:T1": "Routes: Compute Routes Essentials",
+  "routes:computeRoutes:T2": "Routes: Compute Routes Pro",
+  "routes:computeRouteMatrix:T1": "Routes: Compute Route Matrix Essentials",
+  "routes:computeRouteMatrix:T2": "Routes: Compute Route Matrix Pro",
+  "grounding-lite:search_places:T1": "Maps Grounding Lite",
+  "grounding-lite:resolve_names:T1": "Maps Grounding Lite",
+  "grounding-lite:resolve_maps_urls:T1": "Maps Grounding Lite",
+  "geocoding:geocode:T1": "Geocoding",
+  "geocoding:reverseGeocode:T1": "Geocoding",
+  "elevation:elevation:T2": "Elevation",
+};
+
 export interface FieldMaskResult {
   fields: string[];
   mask: string;
@@ -128,6 +147,10 @@ export function tierAtLeast(left: CostTier, right: CostTier): boolean {
 
 export function maxTier(...tiers: CostTier[]): CostTier {
   return tiers.reduce<CostTier>((current, tier) => (tierAtLeast(tier, current) ? tier : current), "T0");
+}
+
+export function expectedSku(api: string, operation: string, tier: CostTier): string {
+  return REQUEST_SKUS[`${api}:${operation}:${tier}`] || `${api}:${operation}`;
 }
 
 function fieldTier(field: string): CostTier {

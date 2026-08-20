@@ -196,7 +196,8 @@ const serverConfigs: ServerInstanceConfig[] = [
 
 export function filterTools(tools: ToolConfig[]): ToolConfig[] {
   const raw = process.env.GOOGLE_MAPS_ENABLED_TOOLS?.trim();
-  if (!raw || raw === "*") return tools;
+  if (raw === undefined || raw === "*") return tools;
+  if (!raw) throw new Error("GOOGLE_MAPS_ENABLED_TOOLS cannot be empty.");
 
   const enabled = new Set(
     raw

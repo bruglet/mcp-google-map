@@ -18,7 +18,7 @@ export class GroundingLiteService {
     }
   }
 
-  async searchPlaces(textQuery: string): Promise<any> {
+  async searchPlaces(textQuery: string, parentTool = "maps_grounded_search"): Promise<any> {
     const client = await this.client();
     return withAccounting(
       {
@@ -26,7 +26,7 @@ export class GroundingLiteService {
         operation: "search_places",
         tier: "T1",
         units: 1,
-        parentTool: "maps_grounded_search",
+        parentTool,
         reason: "semantic Google Maps place discovery",
         fanout: "S",
       },
@@ -39,7 +39,12 @@ export class GroundingLiteService {
     );
   }
 
-  async resolveNames(queries: Array<{ text: string }>, locationBias?: unknown, regionCode?: string): Promise<any> {
+  async resolveNames(
+    queries: Array<{ text: string }>,
+    locationBias?: unknown,
+    regionCode?: string,
+    parentTool = "maps_resolve_names"
+  ): Promise<any> {
     if (queries.length > 20) throw new Error("Grounding Lite resolve_names accepts at most 20 queries per request.");
     const client = await this.client();
     return withAccounting(
@@ -48,7 +53,7 @@ export class GroundingLiteService {
         operation: "resolve_names",
         tier: "T1",
         units: 1,
-        parentTool: "maps_resolve_names",
+        parentTool,
         reason: "explicit Place ID resolution",
         fanout: "S",
       },
@@ -68,7 +73,7 @@ export class GroundingLiteService {
     );
   }
 
-  async resolveMapsUrls(urls: string[]): Promise<any> {
+  async resolveMapsUrls(urls: string[], parentTool = "maps_resolve_maps_urls"): Promise<any> {
     if (urls.length > 20) throw new Error("Grounding Lite resolve_maps_urls accepts at most 20 URLs per request.");
     const client = await this.client();
     return withAccounting(
@@ -77,7 +82,7 @@ export class GroundingLiteService {
         operation: "resolve_maps_urls",
         tier: "T1",
         units: 1,
-        parentTool: "maps_resolve_maps_urls",
+        parentTool,
         reason: "explicit Maps URL resolution",
         fanout: "S",
       },
@@ -90,8 +95,8 @@ export class GroundingLiteService {
     );
   }
 
-  async resolveMapsUrlsToPlaceIds(urls: string[]): Promise<string[]> {
-    const result = await this.resolveMapsUrls(urls);
+  async resolveMapsUrlsToPlaceIds(urls: string[], parentTool = "maps_resolve_maps_urls"): Promise<string[]> {
+    const result = await this.resolveMapsUrls(urls, parentTool);
     const values = extractIndexedPlaceIds(result, "entities");
     if (!values || values.length < urls.length || values.some((value) => !value))
       throw new Error("GROUNDING_UNAVAILABLE: Maps URL resolution returned incomplete structured identities");
