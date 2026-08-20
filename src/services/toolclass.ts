@@ -2,6 +2,7 @@ import { Client, Language } from "@googlemaps/google-maps-services-js";
 import dotenv from "dotenv";
 import { Logger } from "../index.js";
 import { RoutesService } from "./RoutesService.js";
+import { withAccounting } from "./requestAccounting.js";
 
 dotenv.config();
 
@@ -65,13 +66,25 @@ export class GoogleMapsTools {
 
   private async geocodeAddress(address: string): Promise<GeocodeResult> {
     try {
-      const response = await this.client.geocode({
-        params: {
-          address: address,
-          key: this.apiKey,
-          language: this.defaultLanguage,
+      const response = await withAccounting(
+        {
+          api: "geocoding",
+          operation: "geocode",
+          tier: "T1",
+          units: 1,
+          parentTool: "maps_geocode",
+          reason: "address to coordinate resolution",
+          fanout: "S",
         },
-      });
+        () =>
+          this.client.geocode({
+            params: {
+              address: address,
+              key: this.apiKey,
+              language: this.defaultLanguage,
+            },
+          })
+      );
 
       if (response.data.results.length === 0) {
         throw new Error(`No location found for address: "${address}"`);
@@ -135,13 +148,25 @@ export class GoogleMapsTools {
     address_components: any[];
   }> {
     try {
-      const response = await this.client.reverseGeocode({
-        params: {
-          latlng: { lat: latitude, lng: longitude },
-          language: this.defaultLanguage,
-          key: this.apiKey,
+      const response = await withAccounting(
+        {
+          api: "geocoding",
+          operation: "reverseGeocode",
+          tier: "T1",
+          units: 1,
+          parentTool: "maps_reverse_geocode",
+          reason: "coordinate to address resolution",
+          fanout: "S",
         },
-      });
+        () =>
+          this.client.reverseGeocode({
+            params: {
+              latlng: { lat: latitude, lng: longitude },
+              language: this.defaultLanguage,
+              key: this.apiKey,
+            },
+          })
+      );
 
       if (response.data.results.length === 0) {
         throw new Error(`No address found for coordinates: (${latitude}, ${longitude})`);
@@ -175,6 +200,7 @@ export class GoogleMapsTools {
         origin: params.origin,
         destination: params.destination,
         mode: params.mode || "walking",
+        detailLevel: "geometry",
       });
 
       const polyline = directions.routes[0]?.polyline?.encodedPolyline;
@@ -185,30 +211,43 @@ export class GoogleMapsTools {
       // Step 2: Call Places searchText REST API with searchAlongRouteParameters
       const maxResults = Math.min(params.maxResults || 5, 20);
       const fieldMask =
-        "places.displayName,places.id,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.currentOpeningHours.openNow";
+        "places.displayName,places.name,places.id,places.formattedAddress,places.location,places.primaryType";
 
-      const response = await fetch("https://places.googleapis.com/v1/places:searchText", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Goog-Api-Key": this.apiKey,
-          "X-Goog-FieldMask": fieldMask,
+      const response = await withAccounting(
+        {
+          api: "places",
+          operation: "searchAlongRoute",
+          tier: "T2",
+          units: 1,
+          parentTool: "maps_search_along_route",
+          reason: "minimal candidates along route geometry",
+          fanout: "S",
         },
-        body: JSON.stringify({
-          textQuery: params.textQuery,
-          searchAlongRouteParameters: {
-            polyline: {
-              encodedPolyline: polyline,
+        async () => {
+          const response = await fetch("https://places.googleapis.com/v1/places:searchText", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Goog-Api-Key": this.apiKey,
+              "X-Goog-FieldMask": fieldMask,
             },
-          },
-          maxResultCount: maxResults,
-        }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData?.error?.message || `HTTP ${response.status}`);
-      }
+            body: JSON.stringify({
+              textQuery: params.textQuery,
+              searchAlongRouteParameters: {
+                polyline: {
+                  encodedPolyline: polyline,
+                },
+              },
+              maxResultCount: maxResults,
+            }),
+          });
+          if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData?.error?.message || `HTTP ${response.status}`);
+          }
+          return response;
+        }
+      );
 
       const data = await response.json();
       const places = (data.places || []).map((place: any) => ({
@@ -219,9 +258,7 @@ export class GoogleMapsTools {
           lat: place.location?.latitude || 0,
           lng: place.location?.longitude || 0,
         },
-        rating: place.rating || 0,
-        user_ratings_total: place.userRatingCount || 0,
-        open_now: place.currentOpeningHours?.openNow ?? null,
+        primary_type: place.primaryType || null,
       }));
 
       return {
@@ -504,12 +541,24 @@ export class GoogleMapsTools {
         lng: loc.longitude,
       }));
 
-      const response = await this.client.elevation({
-        params: {
-          locations: formattedLocations,
-          key: this.apiKey,
+      const response = await withAccounting(
+        {
+          api: "elevation",
+          operation: "elevation",
+          tier: "T2",
+          units: locations.length,
+          parentTool: "maps_elevation",
+          reason: "explicit elevation lookup",
+          fanout: locations.length > 5 ? "M" : "S",
         },
-      });
+        () =>
+          this.client.elevation({
+            params: {
+              locations: formattedLocations,
+              key: this.apiKey,
+            },
+          })
+      );
 
       const result = response.data;
 

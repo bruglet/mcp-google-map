@@ -4,7 +4,7 @@ import { getCurrentApiKey } from "../../utils/requestContext.js";
 
 const NAME = "maps_plan_route";
 const DESCRIPTION =
-  "Plan an optimized multi-stop route in one call — geocodes all stops, uses Routes API waypoint optimization (up to 25 intermediate stops) to find the most efficient visit order, and returns directions for each leg. Use when the user says 'visit these 5 places efficiently', 'plan a route through A, B, C', or needs a multi-stop itinerary. Replaces the manual chain of geocode → distance-matrix → directions. For multi-day trips: create one plan_route call per day with stops that follow a geographic arc (e.g. east→west) rather than mixing distant areas. After results, call static_map to visualize the route.";
+  "Plan an optimized multi-stop route in one call — geocodes all stops, uses explicit Routes API waypoint optimization (up to 25 intermediate stops), and returns compact leg directions. Use when the user says 'visit these 5 places efficiently', 'plan a route through A, B, C', or needs a multi-stop itinerary. Departure time provides schedule context; traffic-aware routing is not enabled implicitly. Transit uses the time-propagating itinerary planner.";
 
 const SCHEMA = {
   stops: z.array(z.string()).min(2).describe("List of addresses or landmarks to visit (minimum 2)"),
@@ -18,7 +18,9 @@ const SCHEMA = {
   departure_time: z
     .string()
     .optional()
-    .describe("Departure time in ISO 8601 format (e.g. 2026-03-21T09:00:00Z). Enables traffic-aware routing."),
+    .describe(
+      "Departure time in ISO 8601 format (e.g. 2026-03-21T09:00:00Z). Does not implicitly enable live traffic."
+    ),
   avoid_tolls: z
     .boolean()
     .optional()

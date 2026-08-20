@@ -8,8 +8,8 @@ import { Server } from "http";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { Logger } from "../index.js";
-import { ApiKeyManager } from "../utils/apiKeyManager.js";
 import { runWithContext } from "../utils/requestContext.js";
+import { cloudflareAuthMiddleware } from "../utils/cloudflareAuth.js";
 
 const VERSION = "0.0.1";
 
@@ -31,6 +31,7 @@ export class BaseMcpServer {
   protected readonly server: McpServer;
   private sessions: { [sessionId: string]: SessionContext } = {};
   private httpServer: Server | null = null;
+  private httpReady = false;
   private serverName: string;
   private tools: ToolConfig[];
 
@@ -43,7 +44,13 @@ export class BaseMcpServer {
   private createMcpServer(): McpServer {
     const server = new McpServer(
       { name: this.serverName, version: VERSION },
-      { capabilities: { logging: {}, tools: {} } }
+      {
+        capabilities: { logging: {}, tools: {} },
+        instructions:
+          "Use this MCP for Google-specific places, Place IDs, Maps URLs, routing, and transit planning. " +
+          "Results are cost-controlled: optional Places enrichment, reviews, ratings, hours, photos, parking, and atmosphere fields are not requested unless explicitly selected. " +
+          "Driving traffic is disabled by default. Matrix usage is billed per origin-destination element. Prefer native weather, image search, and current transit-disruption web search when those capabilities are sufficient.",
+      }
     );
     this.tools.forEach((tool) => {
       server.registerTool(
@@ -78,24 +85,39 @@ export class BaseMcpServer {
     const app = express();
     app.use(express.json());
 
+    app.get("/healthz", (_req: Request, res: Response) => {
+      res.status(200).json({
+        status: this.httpReady ? "ok" : "starting",
+        service: this.serverName,
+        version: VERSION,
+        liveness: "ok",
+        ready: this.httpReady,
+        config: {
+          googleMapsApiKeyConfigured: Boolean(process.env.GOOGLE_MAPS_API_KEY),
+          groundingApiKeyConfigured: Boolean(
+            process.env.GOOGLE_MAPS_GROUNDING_API_KEY || process.env.GOOGLE_MAPS_API_KEY
+          ),
+          cloudflareAccessConfigured: Boolean(
+            process.env.CLOUDFLARE_ACCESS_TEAM_DOMAIN && process.env.CLOUDFLARE_ACCESS_AUD
+          ),
+          authMode: process.env.MCP_AUTH_MODE || "cloudflare",
+        },
+        build: {
+          revision: process.env.BUILD_REVISION || "unknown",
+          upstreamBase: process.env.UPSTREAM_BASE_COMMIT || "unknown",
+        },
+      });
+    });
+    app.use("/mcp", cloudflareAuthMiddleware);
+
     // Handle POST requests for client-to-server communication
     app.post("/mcp", async (req: Request, res: Response) => {
       const sessionId = req.headers["mcp-session-id"] as string | undefined;
       let context: SessionContext;
 
-      // Extract API key from headers if provided
-      const apiKeyManager = ApiKeyManager.getInstance();
-      const requestApiKey = apiKeyManager.getApiKey(req);
-
-      Logger.log(`${this.serverName} API key received from request context`);
-
       if (sessionId && this.sessions[sessionId]) {
         // Reuse existing session
         context = this.sessions[sessionId];
-        // Update API key if provided in this request
-        if (requestApiKey) {
-          context.apiKey = requestApiKey;
-        }
       } else if (!sessionId && isInitializeRequest(req.body)) {
         // New initialization request
         const transport = new StreamableHTTPServerTransport({
@@ -113,7 +135,7 @@ export class BaseMcpServer {
         // Create session context
         context = {
           transport,
-          apiKey: requestApiKey,
+          apiKey: process.env.GOOGLE_MAPS_API_KEY,
         };
 
         // Clean up transport when closed
@@ -155,13 +177,6 @@ export class BaseMcpServer {
 
       const context = this.sessions[sessionId];
 
-      // Check for updated API key in headers
-      const apiKeyManager = ApiKeyManager.getInstance();
-      const requestApiKey = apiKeyManager.getApiKey(req);
-      if (requestApiKey) {
-        context.apiKey = requestApiKey;
-      }
-
       // Run the request handler with the API key in context
       await runWithContext({ apiKey: context.apiKey, sessionId }, async () => {
         await context.transport.handleRequest(req, res);
@@ -176,6 +191,7 @@ export class BaseMcpServer {
 
     const displayHost = host === "0.0.0.0" ? "localhost" : host;
     this.httpServer = app.listen(port, host, () => {
+      this.httpReady = true;
       Logger.log(`[${this.serverName}] HTTP server listening on ${host}:${port}`);
       Logger.log(`[${this.serverName}] MCP endpoint available at http://${displayHost}:${port}/mcp`);
     });
@@ -187,39 +203,35 @@ export class BaseMcpServer {
   }
 
   async stopHttpServer(): Promise<void> {
-    if (!this.httpServer) {
-      // Changed to Logger.warn and return, as throwing an error might be too harsh if called multiple times.
-      Logger.error(`[${this.serverName}] HTTP server is not running or already stopped.`);
+    const httpServer = this.httpServer;
+    if (!httpServer) {
+      this.httpReady = false;
       return;
     }
 
-    return new Promise((resolve, reject) => {
-      this.httpServer!.close((err: Error | undefined) => {
-        if (err) {
+    const sessions = Object.values(this.sessions);
+    this.sessions = {};
+    await Promise.all(
+      sessions.map(async (context) => {
+        await context.transport.close?.();
+      })
+    );
+
+    this.httpReady = false;
+    this.httpServer = null;
+
+    await new Promise<void>((resolve, reject) => {
+      httpServer.close((err: Error | undefined) => {
+        if (err && (err as NodeJS.ErrnoException).code !== "ERR_SERVER_NOT_RUNNING") {
           Logger.error(`[${this.serverName}] Error stopping HTTP server:`, err);
           reject(err);
           return;
         }
-        Logger.log(`[${this.serverName}] HTTP server stopped.`);
-        this.httpServer = null;
-        const closingSessions = Object.values(this.sessions).map((context) => {
-          // Clean up session
-          if (context.transport.sessionId) {
-            delete this.sessions[context.transport.sessionId];
-          }
-          return Promise.resolve();
-        });
-        Promise.all(closingSessions)
-          .then(() => {
-            Logger.log(`[${this.serverName}] All transports closed.`);
-            resolve();
-          })
-          .catch((transportCloseErr) => {
-            // This catch might be redundant if individual transport close errors are handled
-            Logger.error(`[${this.serverName}] Error during bulk transport closing:`, transportCloseErr);
-            reject(transportCloseErr);
-          });
+        resolve();
       });
+      httpServer.closeAllConnections();
     });
+
+    Logger.log(`[${this.serverName}] HTTP server and all transports stopped.`);
   }
 }

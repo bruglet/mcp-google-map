@@ -10,16 +10,19 @@ import { DistanceMatrix, DistanceMatrixParams } from "./tools/maps/distanceMatri
 import { Directions, DirectionsParams } from "./tools/maps/directions.js";
 import { Elevation, ElevationParams } from "./tools/maps/elevation.js";
 import { SearchPlaces, SearchPlacesParams } from "./tools/maps/searchPlaces.js";
-import { Timezone, TimezoneParams } from "./tools/maps/timezone.js";
-import { Weather, WeatherParams } from "./tools/maps/weather.js";
 import { ExploreArea, ExploreAreaParams } from "./tools/maps/exploreArea.js";
 import { PlanRoute, PlanRouteParams } from "./tools/maps/planRoute.js";
 import { ComparePlaces, ComparePlacesParams } from "./tools/maps/comparePlaces.js";
-import { AirQuality, AirQualityParams } from "./tools/maps/airQuality.js";
-import { StaticMap, StaticMapParams } from "./tools/maps/staticMap.js";
 import { BatchGeocode, BatchGeocodeParams } from "./tools/maps/batchGeocode.js";
 import { SearchAlongRoute, SearchAlongRouteParams } from "./tools/maps/searchAlongRoute.js";
-import { LocalRankTracker, LocalRankTrackerParams } from "./tools/maps/localRankTracker.js";
+import { CreateUrl, CreateUrlParams } from "./tools/maps/createUrl.js";
+import { GroundedSearch, GroundedSearchParams } from "./tools/maps/groundedSearch.js";
+import { ResolveNames, ResolveNamesParams } from "./tools/maps/resolveNames.js";
+import { ResolveMapsUrls, ResolveMapsUrlsParams } from "./tools/maps/resolveMapsUrls.js";
+import { TransitItineraryTool, TransitItineraryParams } from "./tools/maps/transitItinerary.js";
+import { PlanTransit, PlanTransitParams } from "./tools/maps/planTransit.js";
+import { FindPlacesByTransit, FindPlacesByTransitParams } from "./tools/maps/findPlacesByTransit.js";
+import { OptimizeTransitErrands, OptimizeTransitErrandsParams } from "./tools/maps/optimizeTransitErrands.js";
 
 // All Google Maps tools are read-only API queries
 const MAPS_TOOL_ANNOTATIONS = {
@@ -97,20 +100,6 @@ const serverConfigs: ServerInstanceConfig[] = [
         action: (params: SearchPlacesParams) => SearchPlaces.ACTION(params),
       },
       {
-        name: Timezone.NAME,
-        description: Timezone.DESCRIPTION,
-        schema: Timezone.SCHEMA,
-        annotations: MAPS_TOOL_ANNOTATIONS,
-        action: (params: TimezoneParams) => Timezone.ACTION(params),
-      },
-      {
-        name: Weather.NAME,
-        description: Weather.DESCRIPTION,
-        schema: Weather.SCHEMA,
-        annotations: MAPS_TOOL_ANNOTATIONS,
-        action: (params: WeatherParams) => Weather.ACTION(params),
-      },
-      {
         name: ExploreArea.NAME,
         description: ExploreArea.DESCRIPTION,
         schema: ExploreArea.SCHEMA,
@@ -132,25 +121,60 @@ const serverConfigs: ServerInstanceConfig[] = [
         action: (params: ComparePlacesParams) => ComparePlaces.ACTION(params),
       },
       {
-        name: AirQuality.NAME,
-        description: AirQuality.DESCRIPTION,
-        schema: AirQuality.SCHEMA,
+        name: CreateUrl.NAME,
+        description: CreateUrl.DESCRIPTION,
+        schema: CreateUrl.SCHEMA,
         annotations: MAPS_TOOL_ANNOTATIONS,
-        action: (params: AirQualityParams) => AirQuality.ACTION(params),
+        action: (params: CreateUrlParams) => CreateUrl.ACTION(params),
       },
       {
-        name: StaticMap.NAME,
-        description: StaticMap.DESCRIPTION,
-        schema: StaticMap.SCHEMA,
+        name: GroundedSearch.NAME,
+        description: GroundedSearch.DESCRIPTION,
+        schema: GroundedSearch.SCHEMA,
         annotations: MAPS_TOOL_ANNOTATIONS,
-        action: (params: StaticMapParams) => StaticMap.ACTION(params),
+        action: (params: GroundedSearchParams) => GroundedSearch.ACTION(params),
       },
       {
-        name: BatchGeocode.NAME,
-        description: BatchGeocode.DESCRIPTION,
-        schema: BatchGeocode.SCHEMA,
+        name: ResolveNames.NAME,
+        description: ResolveNames.DESCRIPTION,
+        schema: ResolveNames.SCHEMA,
         annotations: MAPS_TOOL_ANNOTATIONS,
-        action: (params: BatchGeocodeParams) => BatchGeocode.ACTION(params),
+        action: (params: ResolveNamesParams) => ResolveNames.ACTION(params),
+      },
+      {
+        name: ResolveMapsUrls.NAME,
+        description: ResolveMapsUrls.DESCRIPTION,
+        schema: ResolveMapsUrls.SCHEMA,
+        annotations: MAPS_TOOL_ANNOTATIONS,
+        action: (params: ResolveMapsUrlsParams) => ResolveMapsUrls.ACTION(params),
+      },
+      {
+        name: TransitItineraryTool.NAME,
+        description: TransitItineraryTool.DESCRIPTION,
+        schema: TransitItineraryTool.SCHEMA,
+        annotations: MAPS_TOOL_ANNOTATIONS,
+        action: (params: TransitItineraryParams) => TransitItineraryTool.ACTION(params),
+      },
+      {
+        name: PlanTransit.NAME,
+        description: PlanTransit.DESCRIPTION,
+        schema: PlanTransit.SCHEMA,
+        annotations: MAPS_TOOL_ANNOTATIONS,
+        action: (params: PlanTransitParams) => PlanTransit.ACTION(params),
+      },
+      {
+        name: FindPlacesByTransit.NAME,
+        description: FindPlacesByTransit.DESCRIPTION,
+        schema: FindPlacesByTransit.SCHEMA,
+        annotations: MAPS_TOOL_ANNOTATIONS,
+        action: (params: FindPlacesByTransitParams) => FindPlacesByTransit.ACTION(params),
+      },
+      {
+        name: OptimizeTransitErrands.NAME,
+        description: OptimizeTransitErrands.DESCRIPTION,
+        schema: OptimizeTransitErrands.SCHEMA,
+        annotations: MAPS_TOOL_ANNOTATIONS,
+        action: (params: OptimizeTransitErrandsParams) => OptimizeTransitErrands.ACTION(params),
       },
       {
         name: SearchAlongRoute.NAME,
@@ -160,11 +184,11 @@ const serverConfigs: ServerInstanceConfig[] = [
         action: (params: SearchAlongRouteParams) => SearchAlongRoute.ACTION(params),
       },
       {
-        name: LocalRankTracker.NAME,
-        description: LocalRankTracker.DESCRIPTION,
-        schema: LocalRankTracker.SCHEMA,
+        name: BatchGeocode.NAME,
+        description: BatchGeocode.DESCRIPTION,
+        schema: BatchGeocode.SCHEMA,
         annotations: MAPS_TOOL_ANNOTATIONS,
-        action: (params: LocalRankTrackerParams) => LocalRankTracker.ACTION(params),
+        action: (params: BatchGeocodeParams) => BatchGeocode.ACTION(params),
       },
     ],
   },
@@ -180,11 +204,12 @@ export function filterTools(tools: ToolConfig[]): ToolConfig[] {
       .map((s) => s.trim())
       .filter(Boolean)
   );
-  const filtered = tools.filter((t) => enabled.has(t.name));
+  const unknown = [...enabled].filter((name) => !tools.some((tool) => tool.name === name));
+  if (unknown.length) throw new Error(`Unknown tools in GOOGLE_MAPS_ENABLED_TOOLS: ${unknown.join(", ")}`);
 
+  const filtered = tools.filter((t) => enabled.has(t.name));
   if (filtered.length === 0) {
-    Logger.error(`GOOGLE_MAPS_ENABLED_TOOLS matched 0 tools. Available: ${tools.map((t) => t.name).join(", ")}`);
-    return tools;
+    throw new Error(`GOOGLE_MAPS_ENABLED_TOOLS matched 0 tools. Available: ${tools.map((t) => t.name).join(", ")}`);
   }
 
   Logger.log(`GOOGLE_MAPS_ENABLED_TOOLS: ${filtered.length}/${tools.length} tools active`);

@@ -3,23 +3,226 @@ name: CI
 on:
   pull_request:
     branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_NAME: ghcr.io/bruglet/mcp-google-map
+  NODE_VERSION: 24.x
 
 jobs:
-  ci:
-    runs-on: ubuntu-latest
+  verify:
+    name: Verify source and dependencies
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-node@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 20
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
 
-      - run: npm ci
-      - run: npm run build
-      - run: npm run lint
-      - run: npm run format:check
+      - name: Install locked dependencies
+        run: npm ci
 
-      - name: Smoke Test
-        run: npm test
+      - name: Unit and mocked outbound-request tests
+        run: npm run test:unit
+
+      - name: Build
+        run: npm run build
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Format check
+        run: npm run format:check
+
+      - name: Dependency audit report
+        run: npm audit --json > npm-audit.json || true
+
+      - name: Upload dependency audit
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: npm-audit-${{ github.sha }}
+          path: npm-audit.json
+          if-no-files-found: error
+
+  container:
+    name: Build and smoke-test container
+    needs: verify
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Image metadata
+        id: metadata
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: type=raw,value=ci-${{ github.sha }}
+
+      - name: Build amd64 image for smoke test
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: ${{ env.IMAGE_NAME }}:ci-${{ github.sha }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          build-args: |
+            VCS_REF=${{ github.sha }}
+            UPSTREAM_BASE_COMMIT=be966cc
+            IMAGE_CREATED=${{ github.event.head_commit.timestamp || github.event.pull_request.updated_at }}
+          cache-from: type=gha,scope=mcp-google-map
+          cache-to: type=gha,mode=max,scope=mcp-google-map
+
+      - name: Smoke-test health endpoint with hardening flags
+        shell: bash
+        run: |
+          set -euo pipefail
+          container_id="$(docker run --detach \
+            --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+            --cap-drop=ALL \
+            --security-opt=no-new-privileges:true \
+            --publish 127.0.0.1:13020:3020 \
+            --env MCP_AUTH_MODE=loopback \
+            --env MCP_SERVER_HOST=0.0.0.0 \
+            --env MCP_SERVER_PORT=3020 \
+            --env GOOGLE_MAPS_API_KEY=ci-placeholder \
+            "${IMAGE_NAME}:ci-${GITHUB_SHA}")"
+          cleanup() { docker rm --force "$container_id" >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:13020/healthz > healthz.json; then
+              break
+            fi
+            sleep 1
+          done
+          test -s healthz.json
+          grep -q '"liveness":"ok"' healthz.json
+          grep -q '"ready":true' healthz.json
+          grep -q '"googleMapsApiKeyConfigured":true' healthz.json
+          ! grep -q 'ci-placeholder' healthz.json
+          test "$(docker inspect --format '{{.Config.User}}' "$container_id")" = '10001:10001'
+
+      - name: Container vulnerability report
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:ci-${{ github.sha }}
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "0"
+
+      - name: Upload container vulnerability report artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: trivy-results-${{ github.sha }}
+          path: trivy-results.sarif
+          if-no-files-found: warn
+
+      - name: Upload container vulnerability report to code scanning
+        if: always() && github.event_name != 'pull_request'
+        uses: github/codeql-action/upload-sarif@f3712979fa5f215279b101dd0a2e3bdfb4353324 # v3
+        with:
+          sarif_file: trivy-results.sarif
+
+  dependency-review:
+    name: Review dependency changes
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@05fe4576374b728f0c523d6a13d64c25081e0803 # v4.8.3
+
+  publish:
+    name: Publish signed multi-architecture image
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [verify, container]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+    concurrency:
+      group: publish-main-image
+      cancel-in-progress: true
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Calculate image metadata
+        id: metadata
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=main
+            type=sha,format=long,prefix=sha-
+          labels: |
+            org.opencontainers.image.source=https://github.com/bruglet/mcp-google-map
+            org.opencontainers.image.revision=${{ github.sha }}
+            io.github.bruglet.upstream-base-commit=be966cc
+
+      - name: Build and publish amd64/arm64 images
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          build-args: |
+            VCS_REF=${{ github.sha }}
+            UPSTREAM_BASE_COMMIT=be966cc
+            IMAGE_CREATED=${{ github.event.head_commit.timestamp }}
+          cache-from: type=gha,scope=mcp-google-map
+          cache-to: type=gha,mode=max,scope=mcp-google-map
+          sbom: true
+          provenance: false
+
+      - name: Generate GitHub artifact provenance attestation
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-name: ${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Make GHCR package public
         env:
-          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh api --method PATCH /user/packages/container/mcp-google-map -f visibility=public

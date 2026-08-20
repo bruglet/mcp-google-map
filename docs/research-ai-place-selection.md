@@ -1,4 +1,9 @@
-# AI 選店可行性研究報告：mcp-google-map
+# Historical upstream research — AI 選店可行性研究報告：mcp-google-map
+
+> This is retained as historical research context. It describes the upstream
+> tool surface and must not be used as the current fork API contract. Refer to
+> `docs/USE_CASES.md`, `docs/COST_POLICY.md`, and
+> `skills/google-maps/references/tools-api.md` for v1 behavior.
 
 > Generated: 2026-03-20
 > Based on: 5 parallel research agents (codebase audit, Google API review/context, route scheduling, filter capabilities, market analysis)

@@ -1,123 +1,39 @@
 ---
 name: google-maps
-description: Geospatial query capabilities — geocoding, nearby search, routing, place details, elevation. Trigger when the user mentions locations, addresses, coordinates, navigation, "what's nearby", "how to get there", distance/duration, or any question that inherently involves geographic information — even if they don't explicitly say "map". Update when new tools are added or tool parameters change.
-license: MIT
-version: 0.0.38
-compatibility:
-  - claude-code
-  - cursor
-  - vscode-copilot
-  - openai-codex
-  - gemini-cli
+description: Use the self-hosted bruglet Google Maps MCP for place identity, minimal Places search, routes, Maps URLs, and bounded transit planning.
 ---
 
-# Google Maps - Geospatial Query Capabilities
+# bruglet Google Maps MCP
 
-## Overview
+Use this server for Google-specific geospatial operations. It is a fork of CabLate’s MIT-licensed `cablate/mcp-google-map`; current weather and live transit disruption questions belong to a native web or agency source.
 
-Gives an AI Agent the ability to reason about physical space — understand locations, distances, routes, and elevation, and naturally weave that information into conversation.
+## Cost-aware defaults
 
-Without this Skill, the agent can only guess or refuse when asked "how do I get from Taipei 101 to the National Palace Museum?". With it, the agent returns exact coordinates, step-by-step routes, and travel times.
+- Prefer `maps_create_url` when the user only needs a handoff link. It is local and makes zero Google requests.
+- Prefer `maps_resolve_names` for a small batch of specific names and `maps_resolve_maps_urls` for sharing links. Both are bounded at 20 and experimental; preserve their attribution and mixed-failure correspondence.
+- Search and Place Details return identity/location by default. Ask for semantic enrichment groups only when the user requests hours, ratings, contact, price, reviews, accessibility, amenities, parking, or summaries.
+- `maps_directions` defaults to summary, no traffic awareness, no alternatives, and no geometry. Request `detail_level=steps` for transit lines/transfers or turn-by-turn instructions; request geometry only for a polyline use case.
+- Matrix requests are charged per origin×destination element. Keep candidates bounded and use `planner_mode=conservative` unless the user explicitly needs a broader search.
 
----
+## Tool routing
 
-## Core Principles
+| Need                                | Tool                                                |
+| ----------------------------------- | --------------------------------------------------- |
+| Search nearby or by text            | `maps_search_nearby`, `maps_search_places`          |
+| Get known Place ID details          | `maps_place_details` with explicit `include` groups |
+| Address/coordinate conversion       | `maps_geocode`, `maps_reverse_geocode`              |
+| One route or matrix                 | `maps_directions`, `maps_distance_matrix`           |
+| Local handoff link                  | `maps_create_url`                                   |
+| Ordered transit path                | `maps_transit_itinerary`                            |
+| Reorder known transit stops         | `maps_plan_transit`                                 |
+| Find a business by transit          | `maps_find_places_by_transit`                       |
+| Choose errand branches and order    | `maps_optimize_transit_errands`                     |
+| Search places along a driving route | `maps_search_along_route`                           |
 
-| Principle | Explanation |
-|-----------|-------------|
-| Chain over single-shot | Most geo questions require 2-5 tool calls chained together. See Scenario Recipes in references/tools-api.md for the full patterns. |
-| Match recipe to intent | Map the user's question to a recipe (Trip Planning, Local Discovery, Route Comparison, Neighborhood Analysis, Multi-Stop, Place Comparison, Along the Route) before calling any tool. |
-| Precise input saves trouble | Use coordinates over address strings when available. Use place_id over name search. More precise input = more reliable output. |
-| Output is structured | Every tool returns JSON. Use it directly for downstream computation or comparison — no extra parsing needed. |
-| Present as tables | Users prefer comparison tables and scorecards over raw JSON. Format results for readability. |
+## Transit rules
 
----
+Transit does not accept intermediate waypoints. For an ordered path, call `maps_transit_itinerary`; it routes each leg separately, propagates actual arrival plus dwell, and returns one Maps URL per leg. For fixed-stop optimization, use `maps_plan_transit`; it uses a bounded matrix, local search, and exact chronological reranking.
 
-## Tool Map
+## Credential and privacy boundary
 
-17 tools in five categories — pick by scenario:
-
-### Place Discovery
-| Tool | When to use | Example |
-|------|-------------|---------|
-| `maps_geocode` | Have an address/landmark, need coordinates | "What are the coordinates of Tokyo Tower?" |
-| `maps_reverse_geocode` | Have coordinates, need an address | "What's at 35.65, 139.74?" |
-| `maps_search_nearby` | Know a location, find nearby places by type | "Coffee shops near my hotel" |
-| `maps_search_places` | Natural language place search | "Best ramen in Tokyo" |
-| `maps_place_details` | Have a place_id, need full info (+ optional photo URLs via `maxPhotos`) | "Opening hours and reviews for this restaurant?" |
-| `maps_batch_geocode` | Geocode multiple addresses at once (max 50) | "Get coordinates for all these offices" |
-
-### Routing & Distance
-| Tool | When to use | Example |
-|------|-------------|---------|
-| `maps_directions` | How to get from A to B, including drive-only avoid-tolls/highways controls | "Route from Taipei Main Station to airport avoiding tolls" |
-| `maps_distance_matrix` | Compare distances across multiple points, including drive-only avoid-tolls/highways controls | "Which of these 3 hotels is closest to airport without highways?" |
-| `maps_search_along_route` | Find places along a route (meals, stops) ranked by detour time | "Restaurants between Fushimi Inari and Kiyomizu-dera" |
-
-### Environment
-| Tool | When to use | Example |
-|------|-------------|---------|
-| `maps_elevation` | Query altitude | "Elevation profile along this hiking trail" |
-| `maps_timezone` | Need local time at a destination | "What time is it in Tokyo?" |
-| `maps_weather` | Weather at a location (current or forecast) | "What's the weather in Paris?" |
-| `maps_air_quality` | AQI, pollutants, health recommendations | "Is the air safe for jogging?" |
-
-### Visualization
-| Tool | When to use | Example |
-|------|-------------|---------|
-| `maps_static_map` | Show locations/routes on a map image | "Show me these places on a map" |
-
-### Composite (one-call shortcuts)
-| Tool | When to use | Example |
-|------|-------------|---------|
-| `maps_explore_area` | Overview of a neighborhood | "What's around Tokyo Tower?" |
-| `maps_plan_route` | Multi-stop optimized itinerary (Routes API waypoint optimization, up to 25 stops) with drive-only avoid-tolls/highways controls | "Visit these 5 places efficiently without tolls" |
-| `maps_compare_places` | Side-by-side comparison | "Which ramen shop near Shibuya?" |
-| `maps_local_rank_tracker` | Local SEO grid rank tracking | "How does this dentist rank across the area?" |
-
----
-
-## Known API Limitations
-
-| Tool | Limitation | Workaround |
-|------|-----------|------------|
-| `maps_weather` | Unsupported regions: Japan, China, South Korea, Cuba, Iran, North Korea, Syria | Use web search for weather in these regions |
-| `maps_distance_matrix` | Transit mode may return null in some regions | Fall back to `driving` or `walking` mode, or use `maps_directions` for transit |
-| `maps_plan_route` | Transit mode does not support waypoint optimization | Set `optimize: false` for transit mode |
-| `maps_air_quality` | Works globally including Japan (unlike weather) | — |
-
----
-
-## Invocation
-
-```bash
-npx @cablate/mcp-google-map exec <tool> '<json_params>' [-k API_KEY]
-```
-
-- **API Key**: `-k` flag or `GOOGLE_MAPS_API_KEY` environment variable
-- **Output**: JSON to stdout, errors to stderr
-- **Stateless**: each call is independent
-- **Tool names**: CLI accepts both `maps_geocode` and `geocode` short forms
-- **Tool filtering**: Set `GOOGLE_MAPS_ENABLED_TOOLS` env var to a comma-separated list of tool names to limit registered tools (reduces MCP client context usage). Omit or set to `*` for all tools.
-
----
-
-## When to Update This Skill
-
-| Trigger | What to update |
-|---------|----------------|
-| New tool added to the package | Tool Map table + references/tools-api.md |
-| Tool parameters changed | references/tools-api.md |
-| New chaining pattern discovered in practice | references/tools-api.md chaining section |
-
----
-
-## Reference
-
-| File | Content | When to read |
-|------|---------|--------------|
-| `references/tools-api.md` | Full parameter specs, response formats, 7 scenario recipes, and decision guide | When you need exact parameters, response shapes, or multi-tool workflow patterns |
-| `references/travel-planning.md` | Travel planning methodology — 6-layer model, Search Along Route, anti-patterns | When planning multi-day trips — **read before Recipe 1** |
-| `references/local-seo.md` | Local SEO / Google Business Profile ranking analysis — competitor audit, keyword landscape, gap analysis | When analyzing business rankings, comparing competitors, or scouting locations |
-
-> For **project development** knowledge (architecture, API guide, GIS domain, design decisions), see `skills/project-docs/SKILL.md`.
+The deployed HTTP origin validates Cloudflare Access JWTs. Never send a Google key in an MCP request header, bearer token, URL, prompt, result, or tool argument. The server reads `GOOGLE_MAPS_API_KEY` only from its protected environment. Do not ask the origin to implement user login or ChatGPT-facing OAuth.

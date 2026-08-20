@@ -4,7 +4,7 @@ import { getCurrentApiKey } from "../../utils/requestContext.js";
 
 const NAME = "maps_search_nearby";
 const DESCRIPTION =
-  "Find places near a specific location by type (e.g., restaurants, cafes, hotels). Use when the user wants to discover what's around a given address or coordinates, such as 'find coffee shops near Times Square' or 'what hotels are near the airport'. Supports filtering by place type, search radius, minimum rating, and whether currently open.";
+  "Find candidate places near a location by type. Results default to minimal identity/location fields; open-now and minimum-rating filters may be applied by Google without returning those fields. Cost: T2 | Fan-out: S.";
 
 const SCHEMA = {
   center: z

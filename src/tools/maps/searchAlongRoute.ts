@@ -4,7 +4,7 @@ import { getCurrentApiKey } from "../../utils/requestContext.js";
 
 const NAME = "maps_search_along_route";
 const DESCRIPTION =
-  "Search for places along a route between two points — restaurants, cafes, gas stations, etc. ranked by minimal detour time. Use for trip planning to find meals, rest stops, or attractions between landmarks without backtracking. Internally computes the route, then searches along it. Essential for building itineraries where stops should feel 'on the way' rather than 'detour to'.";
+  "Search for places along a route. A route geometry is requested internally because the Places search needs it, while candidate fields remain minimal. Use for family drives, meals, fuel, and stops that should be on the way. Cost: T2 | Fan-out: M.";
 
 const SCHEMA = {
   textQuery: z.string().describe("What to search for along the route (e.g. 'restaurant', 'coffee shop', 'temple')"),

@@ -4,7 +4,7 @@ import { getCurrentApiKey } from "../../utils/requestContext.js";
 
 const NAME = "maps_compare_places";
 const DESCRIPTION =
-  "Compare multiple places side-by-side in one call — searches by query, gets details for each result, and optionally calculates distance from your location. Use when the user asks 'which restaurant should I pick', 'compare these hotels', or needs a decision table. Replaces the manual chain of search-places → place-details → distance-matrix.";
+  "Compare candidate places side-by-side. Search and basic identity are returned by default; optional enrichment and route-matrix comparison are explicit. Travel mode is configurable and defaults to transit when a user location is supplied. Cost: T1-T4 | Fan-out: M.";
 
 const SCHEMA = {
   query: z.string().describe("Search query (e.g., 'ramen near Shibuya', 'hotels in Taipei')"),
@@ -16,6 +16,26 @@ const SCHEMA = {
     .optional()
     .describe("Your current location — if provided, adds distance and drive time to each result"),
   limit: z.number().optional().describe("Max places to compare (default: 5)"),
+  mode: z
+    .enum(["driving", "walking", "bicycling", "transit"])
+    .default("transit")
+    .describe("Optional comparison travel mode"),
+  include: z
+    .array(
+      z.enum([
+        "contact",
+        "hours",
+        "ratings",
+        "price",
+        "reviews",
+        "accessibility",
+        "amenities",
+        "parking",
+        "ai_summaries",
+      ])
+    )
+    .optional()
+    .describe("Optional Place Details groups"),
 };
 
 export type ComparePlacesParams = z.infer<z.ZodObject<typeof SCHEMA>>;

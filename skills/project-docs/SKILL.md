@@ -1,6 +1,6 @@
 ---
 name: mcp-google-map-project
-description: Project knowledge for developing and maintaining @cablate/mcp-google-map. Architecture, Google Maps API guide, GIS domain knowledge, and design decisions. Read this skill to onboard onto the project or make informed development decisions.
+description: Project knowledge for developing and maintaining bruglet/mcp-google-map, a cost-conscious public fork of CabLate’s MIT-licensed Google Maps MCP.
 version: 0.0.1
 compatibility:
   - claude-code
@@ -12,7 +12,7 @@ compatibility:
 
 ## Overview
 
-This skill contains everything needed to develop, maintain, and extend the `@cablate/mcp-google-map` MCP server. Reading these files gives you full context on architecture, API specifics, domain knowledge, and the reasoning behind design decisions.
+This skill contains orientation for developing and maintaining the `bruglet/mcp-google-map` fork. The authoritative deployment, cost, authentication, and planner behavior is in the root README and `docs/`; the reference files in this inherited directory are historical upstream material and must not override the fork’s server-side credential boundary or disabled-tool policy.
 
 For the **agent skill** (how to USE the tools), see `skills/google-maps/SKILL.md`.
 
@@ -20,24 +20,24 @@ For the **agent skill** (how to USE the tools), see `skills/google-maps/SKILL.md
 
 ## Quick Orientation
 
-| Aspect | Summary |
-|--------|---------|
-| **What** | MCP server providing Google Maps tools for AI agents |
-| **Stack** | TypeScript, Node.js, Express, MCP SDK, Zod |
-| **Tools** | 17 tools (14 atomic + 3 composite) |
-| **Transports** | stdio, Streamable HTTP, standalone exec CLI |
-| **APIs** | Places API (New), Directions, Geocoding, Elevation, Timezone, Weather, Air Quality, Static Maps, Search Along Route |
+| Aspect         | Summary                                                                                         |
+| -------------- | ----------------------------------------------------------------------------------------------- |
+| **What**       | MCP server providing Google Maps tools for AI agents                                            |
+| **Stack**      | TypeScript, Node.js, Express, MCP SDK, Zod                                                      |
+| **Tools**      | Cost-controlled Places/Routes, Grounding Lite, local URL, and bounded transit-planning tools    |
+| **Transports** | stdio, Streamable HTTP, standalone exec CLI                                                     |
+| **APIs**       | Places API (New), Routes, Geocoding, Elevation, Grounding Lite place tools, and local Maps URLs |
 
 ---
 
 ## Reference Files
 
-| File | Content | When to read |
-|------|---------|--------------|
-| `references/architecture.md` | System architecture, 3-layer design, transport modes, tool registration flow, 9-file checklist, code map | **Start here** when onboarding. Also read when adding new tools. |
-| `references/google-maps-api-guide.md` | All Google Maps API endpoints used, pricing, coverage limits, rate limits, common gotchas, Places New vs Legacy | When debugging API errors, evaluating new APIs, or checking costs |
-| `references/geo-domain-knowledge.md` | GIS fundamentals — coordinates, distance, geocoding, place types, spatial search, map projection, Japan-specific knowledge | When making tool design decisions that involve geographic concepts |
-| `references/decisions.md` | 10 Architecture Decision Records (ADR) with context and rationale | When asking "why was X built this way?" or considering changes to existing design |
+| File                                  | Content                                                                                                                    | When to read                                                                      |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `references/architecture.md`          | System architecture, 3-layer design, transport modes, tool registration flow, 9-file checklist, code map                   | **Start here** when onboarding. Also read when adding new tools.                  |
+| `references/google-maps-api-guide.md` | All Google Maps API endpoints used, pricing, coverage limits, rate limits, common gotchas, Places New vs Legacy            | When debugging API errors, evaluating new APIs, or checking costs                 |
+| `references/geo-domain-knowledge.md`  | GIS fundamentals — coordinates, distance, geocoding, place types, spatial search, map projection, Japan-specific knowledge | When making tool design decisions that involve geographic concepts                |
+| `references/decisions.md`             | 10 Architecture Decision Records (ADR) with context and rationale                                                          | When asking "why was X built this way?" or considering changes to existing design |
 
 ---
 
@@ -58,9 +58,9 @@ See `references/architecture.md` § "9-File Tool Change Checklist" for the compl
 
 ## When to Update This Skill
 
-| Trigger | What to update |
-|---------|----------------|
-| Architecture change | `references/architecture.md` |
-| New Google Maps API integrated | `references/google-maps-api-guide.md` |
-| New design decision made | `references/decisions.md` (add ADR) |
-| New GIS concept relevant to tools | `references/geo-domain-knowledge.md` |
+| Trigger                           | What to update                        |
+| --------------------------------- | ------------------------------------- |
+| Architecture change               | `references/architecture.md`          |
+| New Google Maps API integrated    | `references/google-maps-api-guide.md` |
+| New design decision made          | `references/decisions.md` (add ADR)   |
+| New GIS concept relevant to tools | `references/geo-domain-knowledge.md`  |

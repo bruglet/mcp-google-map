@@ -4,7 +4,7 @@ import { getCurrentApiKey } from "../../utils/requestContext.js";
 
 const NAME = "maps_explore_area";
 const DESCRIPTION =
-  "Explore what's around a location in one call — searches multiple place types, gets details for the top results, and returns a categorized summary. Use when the user asks 'what's around here', 'explore the area near my hotel', or needs a quick overview of a neighborhood. Replaces the manual chain of geocode → search-nearby → place-details. For trip planning: use search_places first to get geographically spread anchor points, then call this tool around each anchor (e.g. 'Gion, Kyoto') — never pass just the city name, as it clusters all results in one area. After results, call static_map to visualize.";
+  "Explore nearby categories in one call. Candidate search is cheap and detail enrichment is opt-in; enrich_top_n defaults to 0. Use for a neighborhood overview, not generic reviews/photos. Cost: T1-T4 | Fan-out: M.";
 
 const SCHEMA = {
   location: z.string().describe("Address or landmark to explore around"),
@@ -15,7 +15,29 @@ const SCHEMA = {
       "Place types to search (default: restaurant, cafe, tourist_attraction). Must be Places API (New) type names. Examples: hotel, bar, park, museum"
     ),
   radius: z.number().optional().describe("Search radius in meters (default: 1000)"),
-  topN: z.number().optional().describe("Number of top results per type to get details for (default: 3)"),
+  enrich_top_n: z
+    .number()
+    .int()
+    .min(0)
+    .max(10)
+    .default(0)
+    .describe("Number of top results per type to enrich; default 0"),
+  include: z
+    .array(
+      z.enum([
+        "contact",
+        "hours",
+        "ratings",
+        "price",
+        "reviews",
+        "accessibility",
+        "amenities",
+        "parking",
+        "ai_summaries",
+      ])
+    )
+    .optional()
+    .describe("Optional detail groups for enriched candidates"),
 };
 
 export type ExploreAreaParams = z.infer<z.ZodObject<typeof SCHEMA>>;

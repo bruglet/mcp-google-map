@@ -1,0 +1,39 @@
+[Unit]
+Description=Cost-conscious Google Maps MCP
+Wants=network-online.target
+After=network-online.target
+
+[Container]
+Image=ghcr.io/bruglet/mcp-google-map:main
+ContainerName=mcp-google-map
+UserNS=keep-id
+PublishPort=127.0.0.1:3020:3020
+EnvironmentFile=%h/.config/mcp-google-map/mcp-google-map.env
+Environment=MCP_SERVER_HOST=0.0.0.0
+Environment=MCP_SERVER_PORT=3020
+Environment=MCP_AUTH_MODE=cloudflare
+Environment=XDG_STATE_HOME=/var/lib/mcp-google-map
+Volume=%h/.local/state/mcp-google-map:/var/lib/mcp-google-map:Z
+ReadOnly=true
+ReadOnlyTmpfs=true
+NoNewPrivileges=true
+DropCapability=ALL
+Memory=512m
+PidsLimit=256
+AutoUpdate=registry
+HealthCmd=node -e "fetch('http://127.0.0.1:3020/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+HealthInterval=30s
+HealthTimeout=5s
+HealthStartPeriod=30s
+HealthRetries=3
+HealthOnFailure=kill
+
+[Service]
+Restart=on-failure
+RestartSec=10s
+TimeoutStartSec=900
+TimeoutStopSec=60s
+ExecStartPost=/usr/bin/bash -c 'for attempt in $(seq 1 45); do /usr/bin/podman healthcheck run mcp-google-map >/dev/null 2>&1 && exit 0; sleep 2; done; exit 1'
+
+[Install]
+WantedBy=default.target

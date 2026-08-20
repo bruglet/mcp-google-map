@@ -1,10 +1,10 @@
-# Contributing to mcp-google-map
+# Contributing to bruglet/mcp-google-map
 
 Thank you for your interest in contributing. This guide covers how to report bugs, suggest features, set up a dev environment, and submit pull requests.
 
 ## Bug Reports
 
-Open an issue at [GitHub Issues](https://github.com/cablate/mcp-google-map/issues) and include:
+Open an issue at [GitHub Issues](https://github.com/bruglet/mcp-google-map/issues) and include:
 
 - A clear title and description
 - Steps to reproduce
@@ -22,11 +22,11 @@ Open an issue with the label `enhancement`. Describe:
 
 ## Development Setup
 
-**Prerequisites:** Node.js >= 18, npm
+**Prerequisites:** Node.js 24 LTS, npm
 
 ```bash
 # Clone the repository
-git clone https://github.com/cablate/mcp-google-map.git
+git clone https://github.com/bruglet/mcp-google-map.git
 cd mcp-google-map
 
 # Install dependencies

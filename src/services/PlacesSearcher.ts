@@ -1,6 +1,9 @@
 import { GoogleMapsTools } from "./toolclass.js";
 import { NewPlacesService } from "./NewPlacesService.js";
 import { RoutesService, parseDuration, formatDistance, formatDuration } from "./RoutesService.js";
+import { createPlaceUrl, createDirectionsUrl } from "./mapsUrlService.js";
+import { PlaceFieldGroup } from "./costPolicy.js";
+import { TransitItineraryService } from "./TransitItineraryService.js";
 
 interface SearchResponse {
   success: boolean;
@@ -54,6 +57,7 @@ interface DirectionsResponse {
     summary: string;
     total_distance: { value: number; text: string };
     total_duration: { value: number; text: string };
+    google_maps_navigation_url?: string;
   };
 }
 
@@ -124,29 +128,29 @@ export class PlacesSearcher {
         location,
         keyword: params.keyword,
         radius: params.radius,
+        openNow: params.openNow,
+        minRating: params.minRating,
       });
-
-      let filteredPlaces = places;
-      if (params.openNow) {
-        filteredPlaces = filteredPlaces.filter((p: any) => p.opening_hours?.open_now === true);
-      }
-      if (params.minRating) {
-        filteredPlaces = filteredPlaces.filter((p: any) => (p.rating || 0) >= (params.minRating || 0));
-      }
 
       return {
         location: location,
         success: true,
-        data: filteredPlaces.map((place: any) => ({
+        data: places.map((place: any) => ({
           name: place.name,
           place_id: place.place_id,
           address: place.formatted_address,
           location: place.geometry.location,
           primary_type: place.primary_type || null,
-          price_level: place.price_level || null,
-          rating: place.rating,
-          total_ratings: place.user_ratings_total,
-          open_now: place.opening_hours?.open_now,
+          google_maps_url: createPlaceUrl({
+            label: place.name,
+            address: place.formatted_address,
+            placeId: place.place_id,
+            coordinates: { latitude: place.geometry.location.lat, longitude: place.geometry.location.lng },
+          }),
+          ...(place.price_level !== undefined ? { price_level: place.price_level } : {}),
+          ...(place.rating !== undefined ? { rating: place.rating } : {}),
+          ...(place.user_ratings_total !== undefined ? { total_ratings: place.user_ratings_total } : {}),
+          ...(place.open_now !== undefined ? { open_now: place.open_now } : {}),
         })),
       };
     } catch (error) {
@@ -187,10 +191,16 @@ export class PlacesSearcher {
           address: place.formatted_address,
           location: place.geometry.location,
           primary_type: place.primary_type || null,
-          price_level: place.price_level || null,
-          rating: place.rating,
-          total_ratings: place.user_ratings_total,
-          open_now: place.opening_hours?.open_now,
+          google_maps_url: createPlaceUrl({
+            label: place.name,
+            address: place.formatted_address,
+            placeId: place.place_id,
+            coordinates: { latitude: place.geometry.location.lat, longitude: place.geometry.location.lng },
+          }),
+          ...(place.price_level !== undefined ? { price_level: place.price_level } : {}),
+          ...(place.rating !== undefined ? { rating: place.rating } : {}),
+          ...(place.user_ratings_total !== undefined ? { total_ratings: place.user_ratings_total } : {}),
+          ...(place.open_now !== undefined ? { open_now: place.open_now } : {}),
         })),
       };
     } catch (error) {
@@ -201,24 +211,9 @@ export class PlacesSearcher {
     }
   }
 
-  async getPlaceDetails(placeId: string, maxPhotos: number = 0): Promise<PlaceDetailsResponse> {
+  async getPlaceDetails(placeId: string, include: PlaceFieldGroup[] = []): Promise<PlaceDetailsResponse> {
     try {
-      const details = await this.newPlacesService.getPlaceDetails(placeId);
-
-      // Resolve photo URLs if requested
-      let photos: Array<{ url: string; width: number; height: number }> | undefined;
-      if (maxPhotos > 0 && details.photos?.length > 0) {
-        const photosToFetch = details.photos.slice(0, maxPhotos);
-        photos = [];
-        for (const photo of photosToFetch) {
-          try {
-            const url = await this.newPlacesService.getPhotoUri(photo.photo_reference);
-            photos.push({ url, width: photo.width, height: photo.height });
-          } catch {
-            // Skip failed photos silently
-          }
-        }
-      }
+      const details = await this.newPlacesService.getPlaceDetails(placeId, include);
 
       return {
         success: true,
@@ -228,13 +223,13 @@ export class PlacesSearcher {
           location: details.geometry?.location,
           primary_type: details.primary_type || null,
           types: details.types || [],
-          rating: details.rating,
-          total_ratings: details.user_ratings_total,
-          opening_hours: details.opening_hours,
-          phone: details.formatted_phone_number,
-          website: details.website,
-          price_level: details.price_level,
-          editorial_summary: details.editorial_summary || null,
+          ...(details.rating !== undefined ? { rating: details.rating } : {}),
+          ...(details.user_ratings_total !== undefined ? { total_ratings: details.user_ratings_total } : {}),
+          ...(details.opening_hours ? { opening_hours: details.opening_hours } : {}),
+          ...(details.formatted_phone_number ? { phone: details.formatted_phone_number } : {}),
+          ...(details.website ? { website: details.website } : {}),
+          ...(details.price_level !== undefined ? { price_level: details.price_level } : {}),
+          ...(details.editorial_summary ? { editorial_summary: details.editorial_summary } : {}),
           ...(details.parking ? { parking: details.parking } : {}),
           ...(details.accessibility ? { accessibility: details.accessibility } : {}),
           ...(details.dining_options ? { dining_options: details.dining_options } : {}),
@@ -243,15 +238,25 @@ export class PlacesSearcher {
           ...(details.payment_options ? { payment_options: details.payment_options } : {}),
           ...(details.review_summary ? { review_summary: details.review_summary } : {}),
           ...(details.generative_summary ? { generative_summary: details.generative_summary } : {}),
-          photo_count: details.photos?.length || 0,
-          ...(photos && photos.length > 0 ? { photos } : {}),
-          reviews: details.reviews?.map((review: any) => ({
-            rating: review.rating,
-            text: review.text,
-            language: review.language || null,
-            time: review.time,
-            author_name: review.author_name,
-          })),
+          ...(details.reviews
+            ? {
+                reviews: details.reviews.map((review: any) => ({
+                  rating: review.rating,
+                  text: review.text,
+                  language: review.language || null,
+                  time: review.time,
+                  author_name: review.author_name,
+                })),
+              }
+            : {}),
+          google_maps_url: createPlaceUrl({
+            label: details.name,
+            address: details.formatted_address,
+            placeId: details.place_id,
+            coordinates: details.geometry?.location
+              ? { latitude: details.geometry.location.lat, longitude: details.geometry.location.lng }
+              : undefined,
+          }),
         },
       };
     } catch (error) {
@@ -300,7 +305,10 @@ export class PlacesSearcher {
     mode: "driving" | "walking" | "bicycling" | "transit" = "driving",
     departure_time?: string,
     avoid_tolls?: boolean,
-    avoid_highways?: boolean
+    avoid_highways?: boolean,
+    traffic: "none" | "aware" | "optimal" = "none",
+    transit_modes?: Array<"BUS" | "SUBWAY" | "TRAIN" | "LIGHT_RAIL" | "RAIL">,
+    transit_preference?: "LESS_WALKING" | "FEWER_TRANSFERS"
   ): Promise<DistanceMatrixResponse> {
     try {
       const result = await this.routesService.computeRouteMatrix({
@@ -310,6 +318,9 @@ export class PlacesSearcher {
         ...(departure_time ? { departureTime: new Date(departure_time) } : {}),
         ...(avoid_tolls !== undefined ? { avoidTolls: avoid_tolls } : {}),
         ...(avoid_highways !== undefined ? { avoidHighways: avoid_highways } : {}),
+        traffic,
+        transitModes: transit_modes,
+        transitPreference: transit_preference,
       });
 
       return {
@@ -331,7 +342,12 @@ export class PlacesSearcher {
     departure_time?: string,
     arrival_time?: string,
     avoid_tolls?: boolean,
-    avoid_highways?: boolean
+    avoid_highways?: boolean,
+    traffic: "none" | "aware" | "optimal" = "none",
+    alternatives = false,
+    detail_level: "summary" | "steps" | "geometry" | "full" = "summary",
+    transit_modes?: Array<"BUS" | "SUBWAY" | "TRAIN" | "LIGHT_RAIL" | "RAIL">,
+    transit_preference?: "LESS_WALKING" | "FEWER_TRANSFERS"
   ): Promise<DirectionsResponse> {
     try {
       const departureTime = departure_time ? new Date(departure_time) : undefined;
@@ -344,11 +360,23 @@ export class PlacesSearcher {
         ...(arrivalTime ? { arrivalTime } : {}),
         ...(avoid_tolls !== undefined ? { avoidTolls: avoid_tolls } : {}),
         ...(avoid_highways !== undefined ? { avoidHighways: avoid_highways } : {}),
+        traffic,
+        alternatives,
+        detailLevel: detail_level,
+        transitModes: transit_modes,
+        transitPreference: transit_preference,
+      });
+
+      const destinationUrl = createDirectionsUrl({
+        origin: { address: origin },
+        destination: { address: destination },
+        mode,
+        navigate: true,
       });
 
       return {
         success: true,
-        data: result,
+        data: { ...result, google_maps_navigation_url: destinationUrl },
       };
     } catch (error) {
       return {
@@ -449,12 +477,19 @@ export class PlacesSearcher {
 
   // --------------- Composite Tools ---------------
 
-  async exploreArea(params: { location: string; types?: string[]; radius?: number; topN?: number }): Promise<any> {
+  async exploreArea(params: {
+    location: string;
+    types?: string[];
+    radius?: number;
+    topN?: number;
+    enrich_top_n?: number;
+    include?: PlaceFieldGroup[];
+  }): Promise<any> {
     // "tourist_attraction" is the Places API (New) type name; a bare
     // "attraction" is rejected with INVALID_ARGUMENT: Unsupported types.
     const types = params.types || ["restaurant", "cafe", "tourist_attraction"];
     const radius = params.radius || 1000;
-    const topN = params.topN || 3;
+    const topN = params.enrich_top_n ?? params.topN ?? 0;
 
     // 1. Geocode
     const geo = await this.geocode(params.location);
@@ -476,7 +511,7 @@ export class PlacesSearcher {
       const detailed = [];
       for (const place of topPlaces) {
         if (!place.place_id) continue;
-        const details = await this.getPlaceDetails(place.place_id);
+        const details = await this.getPlaceDetails(place.place_id, params.include || []);
         detailed.push({
           name: place.name,
           address: place.address,
@@ -512,6 +547,14 @@ export class PlacesSearcher {
     const stops = params.stops;
     if (stops.length < 2) throw new Error("Need at least 2 stops");
 
+    if (mode === "transit") {
+      const itinerary = await new TransitItineraryService(this.routesService).routeFixedPath({
+        locations: stops,
+        departureTime: params.departure_time ? new Date(params.departure_time) : undefined,
+      });
+      return { success: true, data: itinerary };
+    }
+
     // 1. Geocode all stops for display addresses
     const geocoded: Array<{ originalName: string; address: string; lat: number; lng: number }> = [];
     for (const stop of stops) {
@@ -530,7 +573,7 @@ export class PlacesSearcher {
     const destination = stops[stops.length - 1];
     const intermediates = stops.length > 2 ? stops.slice(1, -1) : undefined;
     // Optimize if requested, > 2 stops, and not transit (transit doesn't support intermediates for optimization)
-    const shouldOptimize = params.optimize !== false && stops.length > 2 && mode !== "transit";
+    const shouldOptimize = params.optimize !== false && stops.length > 2;
 
     const routeResult = await this.routesService.computeRoutes({
       origin,
@@ -606,6 +649,8 @@ export class PlacesSearcher {
     query: string;
     userLocation?: { latitude: number; longitude: number };
     limit?: number;
+    mode?: "driving" | "walking" | "bicycling" | "transit";
+    include?: PlaceFieldGroup[];
   }): Promise<any> {
     const limit = params.limit || 5;
 
@@ -618,7 +663,9 @@ export class PlacesSearcher {
     // 2. Get details for each
     const compared: any[] = [];
     for (const place of places) {
-      const details = await this.getPlaceDetails(place.place_id);
+      const details = params.include?.length
+        ? await this.getPlaceDetails(place.place_id, params.include)
+        : { data: undefined };
       compared.push({
         name: place.name,
         address: place.address,
@@ -640,11 +687,11 @@ export class PlacesSearcher {
     if (params.userLocation && compared.length > 0) {
       const origin = `${params.userLocation.latitude},${params.userLocation.longitude}`;
       const destinations = places.map((p: any) => `${p.location.lat},${p.location.lng}`);
-      const matrix = await this.calculateDistanceMatrix([origin], destinations, "driving");
+      const matrix = await this.calculateDistanceMatrix([origin], destinations, params.mode || "transit");
       if (matrix.success && matrix.data) {
         for (let i = 0; i < compared.length; i++) {
           compared[i].distance = matrix.data.distances[0]?.[i]?.text;
-          compared[i].drive_time = matrix.data.durations[0]?.[i]?.text;
+          compared[i].travel_time = matrix.data.durations[0]?.[i]?.text;
         }
       }
     }

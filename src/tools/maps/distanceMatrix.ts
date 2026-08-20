@@ -4,7 +4,7 @@ import { getCurrentApiKey } from "../../utils/requestContext.js";
 
 const NAME = "maps_distance_matrix";
 const DESCRIPTION =
-  "Calculate travel distances and durations between multiple origins and destinations in a single request. Use for comparing travel options — e.g., 'which hotel is closest to the office?' or batch distance calculations. Supports driving, walking, bicycling, and transit modes.";
+  "Calculate distances and durations between multiple origins and destinations. Matrix usage is billed per origin×destination element, not per HTTP request; transit and traffic-optimal matrices are limited to 100 elements. Cost: T1-T2 | Fan-out: M/L.";
 
 const SCHEMA = {
   origins: z.array(z.string()).describe("List of origin addresses or coordinates"),
@@ -27,6 +27,15 @@ const SCHEMA = {
     .boolean()
     .optional()
     .describe('Avoid highways where reasonable. Only supported with mode "driving".'),
+  traffic: z
+    .enum(["none", "aware", "optimal"])
+    .default("none")
+    .describe("Driving traffic policy. Defaults to no live traffic."),
+  transit_modes: z
+    .array(z.enum(["bus", "subway", "train", "light_rail", "rail"]))
+    .optional()
+    .describe("Optional preferred transit modes."),
+  transit_preference: z.enum(["less_walking", "fewer_transfers"]).optional().describe("Optional transit preference."),
 };
 
 export type DistanceMatrixParams = z.infer<z.ZodObject<typeof SCHEMA>>;
@@ -42,7 +51,10 @@ async function ACTION(params: any): Promise<{ content: any[]; isError?: boolean 
       params.mode,
       params.departure_time,
       params.avoid_tolls,
-      params.avoid_highways
+      params.avoid_highways,
+      params.traffic,
+      params.transit_modes,
+      params.transit_preference
     );
 
     if (!result.success) {

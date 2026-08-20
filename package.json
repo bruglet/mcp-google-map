@@ -1,8 +1,9 @@
 {
-  "name": "@cablate/mcp-google-map",
-  "version": "0.0.55",
-  "mcpName": "io.github.cablate/google-map",
-  "description": "18 Google Maps tools for AI agents — geocode, search, directions, weather, air quality, local rank tracking, map images via MCP server or standalone CLI",
+  "name": "@bruglet/mcp-google-map",
+  "version": "0.1.0",
+  "private": true,
+  "mcpName": "io.github.bruglet/google-map",
+  "description": "Cost-conscious Google Maps MCP with minimal Places and Routes requests, Grounding Lite, and transit planning",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -18,16 +19,17 @@
     "build": "tsup --dts",
     "start": "node dist/cli.js",
     "dev": "cross-env NODE_ENV=development tsup --watch",
-    "test": "tsx tests/smoke.test.ts",
+    "test": "npm run test:unit",
     "test:unit": "tsx --test tests/*.unit.test.ts",
     "test:e2e": "tsx tests/smoke.test.ts",
+    "test:live": "tsx tests/live.test.ts",
     "lint": "eslint .",
     "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\" \"tests/**/*.ts\"",
     "prepublishOnly": "npm run build"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=24.0.0"
   },
   "keywords": [
     "google",
@@ -49,13 +51,13 @@
   ],
   "author": "CabLate",
   "license": "MIT",
-  "homepage": "https://github.com/cablate/mcp-google-map#readme",
+  "homepage": "https://github.com/bruglet/mcp-google-map#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/cablate/mcp-google-map.git"
+    "url": "git+https://github.com/bruglet/mcp-google-map.git"
   },
   "bugs": {
-    "url": "https://github.com/cablate/mcp-google-map/issues"
+    "url": "https://github.com/bruglet/mcp-google-map/issues"
   },
   "dependencies": {
     "@googlemaps/google-maps-services-js": "^3.4.0",
@@ -65,6 +67,7 @@
     "cross-env": "^7.0.3",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
+    "jose": "^6.2.9",
     "yargs": "^17.7.2",
     "zod": "^3.25.0"
   },

@@ -9,15 +9,14 @@
  *  5. Multiple concurrent sessions work independently
  *
  * Prerequisites:
- *  - GOOGLE_MAPS_API_KEY env var (or pass via --apikey)
+ *  - GOOGLE_MAPS_API_KEY env var
  *  - Port 13579 available
  *
  * Run:
  *   npx tsx tests/smoke.test.ts
- *   npx tsx tests/smoke.test.ts --port 13579 --apikey "AIza..."
+ *   GOOGLE_MAPS_API_KEY="AIza..." npx tsx tests/smoke.test.ts --port 13579
  */
 
-import { randomUUID } from "node:crypto";
 import { config as dotenvConfig } from "dotenv";
 import { resolve } from "node:path";
 
@@ -27,7 +26,7 @@ dotenvConfig({ path: resolve(import.meta.dirname ?? ".", "../.env") });
 // --------------- Config ---------------
 
 const PORT = parseInt(process.argv.find((_, i, a) => a[i - 1] === "--port") ?? "13579");
-const API_KEY = process.argv.find((_, i, a) => a[i - 1] === "--apikey") ?? process.env.GOOGLE_MAPS_API_KEY ?? "";
+const API_KEY = process.env.GOOGLE_MAPS_API_KEY ?? "";
 const MCP_ENDPOINT = `http://localhost:${PORT}/mcp`;
 const PROTOCOL_VERSION = "2025-03-26";
 
@@ -64,10 +63,6 @@ async function sendRequest(session: McpSession, method: string, params?: Record<
 
   if (session.sessionId) {
     headers["mcp-session-id"] = session.sessionId;
-  }
-
-  if (API_KEY) {
-    headers["X-Google-Maps-API-Key"] = API_KEY;
   }
 
   const res = await fetch(MCP_ENDPOINT, {
@@ -124,11 +119,9 @@ async function startServer(): Promise<void> {
 
   return new Promise((resolvePromise, reject) => {
     const args = ["--port", String(PORT)];
-    if (API_KEY) args.push("--apikey", API_KEY);
-
     serverProcess = spawn("node", [cliPath, ...args], {
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, MCP_SERVER_PORT: String(PORT) },
+      env: { ...process.env, MCP_SERVER_PORT: String(PORT), MCP_AUTH_MODE: "loopback" },
     });
 
     const timeout = setTimeout(() => reject(new Error("Server start timed out")), 15000);
@@ -743,8 +736,6 @@ async function testStdio(): Promise<void> {
   const stdioCall = (messages: object[]): Promise<string[]> => {
     return new Promise((resolvePromise, reject) => {
       const args = ["--stdio"];
-      if (API_KEY) args.push("--apikey", API_KEY);
-
       const child = spawn("node", [cliPath, ...args], {
         stdio: ["pipe", "pipe", "pipe"],
       });
@@ -866,7 +857,7 @@ async function testExecMode(): Promise<void> {
 
   const execArgs = (tool: string, params: string): string => {
     try {
-      return execFileSync("node", [cliPath, "exec", tool, params, "--apikey", API_KEY], {
+      return execFileSync("node", [cliPath, "exec", tool, params], {
         encoding: "utf-8",
         timeout: 30000,
         maxBuffer: 10 * 1024 * 1024,
@@ -891,7 +882,7 @@ async function testExecMode(): Promise<void> {
 
   // Test: exec unknown tool returns error
   try {
-    execFileSync("node", [cliPath, "exec", "nonexistent", "{}", "--apikey", "fake"], {
+    execFileSync("node", [cliPath, "exec", "nonexistent", "{}"], {
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "pipe"],
       timeout: 5000,
@@ -972,7 +963,7 @@ async function testExecMode(): Promise<void> {
   const tmpFile = resolve(import.meta.dirname ?? ".", "test-addresses.tmp");
   writeFileSync(tmpFile, "Tokyo Tower\nEiffel Tower\n", "utf-8");
   try {
-    const batchOut = execFileSync("node", [cliPath, "batch-geocode", "-i", tmpFile, "--apikey", API_KEY], {
+    const batchOut = execFileSync("node", [cliPath, "batch-geocode", "-i", tmpFile], {
       encoding: "utf-8",
       timeout: 30000,
     }).trim();

@@ -1,4 +1,8 @@
-# Architecture Decision Records — mcp-google-map
+# Historical upstream decision records — mcp-google-map
+
+> These records describe upstream decisions and are retained for merge
+> context. Fork-specific decisions are documented in `docs/ARCHITECTURE.md`,
+> `docs/DEPLOYMENT.md`, and `UPSTREAM_DEVIATIONS.md`.
 
 > Format: Decision / Context / Rationale
 > Sources: dev-roadmap-spec.md, CLAUDE.md, project history
@@ -12,6 +16,7 @@
 **Context**: Early tool names were inconsistent — some had prefixes, some did not. As the tool count grew and the server was listed on MCP registries, namespace collisions with other MCP servers became a concern. Claude's tool selection also benefits from a clear namespace signal.
 
 **Rationale**:
+
 - Consistent namespace prevents collision when multiple MCP servers are active simultaneously.
 - The `maps_` prefix gives Claude a strong disambiguation signal — it knows these tools are geospatial without reading descriptions.
 - Breaking change was accepted early (pre-stable) to avoid accumulating technical debt. All 9 files in the Tool Change Checklist must be updated together on any rename.
@@ -25,6 +30,7 @@
 **Context**: An alternative design would have the AI call `maps_place_details` N times and synthesize the comparison itself. During testing, this produced inconsistent output quality and required users to explicitly orchestrate the chain.
 
 **Rationale**:
+
 - Users ask "compare these restaurants" and expect a comparison table, not raw data to synthesize.
 - Composite tools reduce chaining overhead and produce deterministic, structured output.
 - The Geo-Reasoning Benchmark (GRB) validates this: Composite Efficiency Score (CES) rewards using 1 call instead of N calls. `compare_places` is the reference case for this metric.
@@ -39,6 +45,7 @@
 **Context**: A natural grouping might combine weather and air quality into one "environmental conditions" call. Both return ambient data about a location.
 
 **Rationale**:
+
 - **Different APIs**: Weather uses one endpoint; Air Quality uses `POST https://airquality.googleapis.com/v1/currentConditions:lookup` — a completely separate Google service requiring separate API enablement.
 - **Different geographic coverage**: Weather API does not support Japan. Air Quality API fully supports Japan (including AEROS local index). Combining them would require complex conditional logic and mislead users about availability.
 - **Different data structures and use cases**: Weather is for planning (will it rain?). Air quality is for health decisions (should I wear a mask? can elderly parents go outside?). The 7-demographic health recommendation field in air quality has no analogue in weather.
@@ -53,6 +60,7 @@
 **Context**: Isochrones are a commonly requested GIS feature — "show me everywhere I can reach in 30 minutes." They are valuable for real estate analysis, event planning, and accessibility research.
 
 **Rationale**:
+
 - **Google has no native isochrone API.** All alternative implementations have disqualifying problems:
   - Mapbox Isochrone API: mature, but introduces a second vendor (Mapbox key) alongside Google — breaks the single-provider positioning.
   - OpenRouteService: free but rate-limited and stability uncertain for production use.
@@ -69,6 +77,7 @@
 **Context**: Google's Address Validation API provides USPS CASS-certified validation, deliverability flags, and address correction. It could theoretically be useful for any tool that takes address inputs.
 
 **Rationale**:
+
 - **Cost**: $17 per 1,000 requests — 3.4× the cost of standard geocoding. This is prohibitive for conversational AI use where users make casual address queries.
 - **Wrong use case**: Address validation is designed for backend pipelines (e-commerce checkout, CRM deduplication, bulk mailing). It requires structured postal input and returns structured postal corrections — not a natural fit for natural-language AI conversations.
 - **Coverage gap**: Only 38 countries supported; excludes most of Asia and Africa. A tool that silently fails for Tokyo or Mumbai addresses would create confusing UX.
@@ -83,6 +92,7 @@
 **Context**: A proposed feature was to maintain implicit state — if a user asks "find coffee shops" after previously mentioning "I'm in Shinjuku," the server would remember Shinjuku and use it as the implicit location for the next search.
 
 **Rationale**:
+
 - **Claude's conversation history already solves this.** Claude reads its own prior messages and can extract previously mentioned locations. A server-side memory layer would duplicate capability that already exists in the LLM.
 - **Composite tools reduce chaining need.** Tools like `maps_explore_area` and `maps_plan_route` accept multi-intent inputs that would otherwise require chaining with location state.
 - **Implementation risks outweigh benefits**:
@@ -100,6 +110,7 @@
 **Context**: MCP servers can expose transport via stdio (subprocess model) or HTTP+SSE (network server model). Both are valid per the MCP specification.
 
 **Rationale**:
+
 - **MCP Registry requirement**: The official MCP registry and most client integrations (Claude Desktop, Claude Code, Cursor) prefer or require stdio-based servers for local installation.
 - **Security model**: stdio servers run as a subprocess of the client, inheriting the client's trust context. No network port exposure, no authentication complexity.
 - **Deployment simplicity**: `npx mcp-google-map` works out of the box without configuring ports, firewalls, or SSL.
@@ -114,6 +125,7 @@
 **Context**: Most tools in this project use the official client library for consistency and type safety. The route-based search requires fetching a polyline and then querying points along it — a pattern not natively supported by the client library.
 
 **Rationale**:
+
 - **Client library may not expose the required parameters or patterns** for buffered route searches. The REST API is always the source of truth; the client library is a convenience wrapper.
 - **Direct REST calls are straightforward**: for GET requests with query parameters, `axios` or `fetch` is sufficient and keeps the implementation explicit.
 - **Type safety can be maintained** by defining TypeScript interfaces for the REST response shapes — same outcome as using the library, without library constraints.
@@ -128,6 +140,7 @@
 **Context**: The roadmap spec (P1-1) proposed implementing MCP's `prompts` primitive to expose slash commands in clients like Claude Desktop. The intended value was giving non-technical users a one-click entry into geo agent mode.
 
 **Rationale**:
+
 - **Client support is low and inconsistent.** As of evaluation, most MCP clients either do not render prompt templates as slash commands or render them inconsistently. The feature would benefit a small fraction of users.
 - **SKILL.md already covers the use case** for Claude Code users — the skill system provides rich scenario guidance, chaining patterns, and example recipes that go beyond what prompt templates support.
 - **Maintenance cost**: Prompt template content would need to stay in sync with tool capabilities, adding to the already-significant 9-file update checklist (CLAUDE.md ADR).
@@ -142,8 +155,9 @@
 **Context**: An AI could answer "what time does Kinkaku-ji open?" from training data. It could suggest a Tokyo itinerary without any tool calls based on memorized "best of Tokyo" patterns. This is faster but fragile.
 
 **Rationale**:
+
 - **Training data goes stale.** Business hours change, places close, new venues open. A tool call to `maps_place_details` returns current data; training knowledge reflects a past snapshot.
 - **Specificity requires data.** A user asking for restaurants near their hotel requires the actual hotel coordinates, not generic neighborhood knowledge. The tool call chain (geocode hotel → search nearby → get details) produces a personalized result that training data cannot replicate.
 - **Verifiability and trust.** When the AI cites data from a tool response (e.g., "Fushimi Inari opens at 6 AM according to Google Maps"), users can verify the source. When it speaks from training data, there is no audit trail.
-- **The SKILL.md geo-domain knowledge** (temple hours, transit rules, energy curves) is intentionally at the *pattern* level — it tells the AI *how* to plan, not *what* specific facts are. The facts come from tools. This separation is the core design principle.
+- **The SKILL.md geo-domain knowledge** (temple hours, transit rules, energy curves) is intentionally at the _pattern_ level — it tells the AI _how_ to plan, not _what_ specific facts are. The facts come from tools. This separation is the core design principle.
 - Practical implementation: always geocode place names (don't assume coordinates), always fetch operating hours from `maps_place_details` (don't assume 9–5), always calculate transit time with `maps_directions` (don't estimate from distance).

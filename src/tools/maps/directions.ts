@@ -4,7 +4,7 @@ import { getCurrentApiKey } from "../../utils/requestContext.js";
 
 const NAME = "maps_directions";
 const DESCRIPTION =
-  "Get step-by-step navigation directions between two points with route details. Use when the user asks 'how do I get from A to B?' and needs the route summary, total distance, estimated travel time, or turn-by-turn instructions. Supports departure/arrival times and multiple travel modes.";
+  "Get directions between two points. Defaults to a compact summary; request steps when the user needs turn-by-turn or transit line details, and geometry only when a polyline is required. Driving traffic defaults to none; traffic-aware/optimal promotes the request to Routes Pro. Cost: T1-T2 | Fan-out: S.";
 
 const SCHEMA = {
   origin: z.string().describe("Starting point address or coordinates"),
@@ -15,6 +15,20 @@ const SCHEMA = {
     .describe("Travel mode for directions"),
   departure_time: z.string().optional().describe("Departure time (ISO string format)"),
   arrival_time: z.string().optional().describe("Arrival time (ISO string format)"),
+  alternatives: z.boolean().optional().describe("Request alternate routes. Defaults false."),
+  detail_level: z
+    .enum(["summary", "steps", "geometry", "full"])
+    .default("summary")
+    .describe("Response detail. Summary is smallest; geometry/full add encoded polylines."),
+  traffic: z
+    .enum(["none", "aware", "optimal"])
+    .default("none")
+    .describe("Driving traffic policy. none is cheapest/default; aware and optimal use traffic-aware routing."),
+  transit_modes: z
+    .array(z.enum(["bus", "subway", "train", "light_rail", "rail"]))
+    .optional()
+    .describe("Optional preferred transit modes."),
+  transit_preference: z.enum(["less_walking", "fewer_transfers"]).optional().describe("Optional transit preference."),
   avoid_tolls: z
     .boolean()
     .optional()
@@ -39,7 +53,12 @@ async function ACTION(params: any): Promise<{ content: any[]; isError?: boolean 
       params.departure_time,
       params.arrival_time,
       params.avoid_tolls,
-      params.avoid_highways
+      params.avoid_highways,
+      params.traffic,
+      params.alternatives,
+      params.detail_level,
+      params.transit_modes,
+      params.transit_preference
     );
 
     if (!result.success) {

@@ -8,6 +8,15 @@ import serverConfigs, { filterTools } from "./config.js";
 import { BaseMcpServer } from "./core/BaseMcpServer.js";
 import { Logger } from "./index.js";
 import { PlacesSearcher } from "./services/PlacesSearcher.js";
+import { CreateUrl } from "./tools/maps/createUrl.js";
+import { FindPlacesByTransit } from "./tools/maps/findPlacesByTransit.js";
+import { GroundedSearch } from "./tools/maps/groundedSearch.js";
+import { OptimizeTransitErrands } from "./tools/maps/optimizeTransitErrands.js";
+import { PlanTransit } from "./tools/maps/planTransit.js";
+import { ResolveMapsUrls } from "./tools/maps/resolveMapsUrls.js";
+import { ResolveNames } from "./tools/maps/resolveNames.js";
+import { TransitItineraryTool } from "./tools/maps/transitItinerary.js";
+import { runWithContext } from "./utils/requestContext.js";
 import { fileURLToPath } from "url";
 import { dirname } from "path";
 import { readFileSync, writeFileSync, existsSync } from "fs";
@@ -22,20 +31,21 @@ dotenvConfig({ path: resolve(process.cwd(), ".env") });
 // Also try to load from the package installation directory
 dotenvConfig({ path: resolve(__dirname, "../.env") });
 
-export async function startServer(port?: number, apiKey?: string, host?: string): Promise<void> {
-  // Override environment variables with CLI arguments if provided
+export async function startServer(port?: number, host?: string): Promise<void> {
+  // Override the listen settings with CLI arguments; credentials remain
+  // process-environment-only.
   if (port) {
     process.env.MCP_SERVER_PORT = port.toString();
-  }
-  if (apiKey) {
-    process.env.GOOGLE_MAPS_API_KEY = apiKey;
   }
   if (host) {
     process.env.MCP_SERVER_HOST = host;
   }
 
   Logger.log("🚀 Starting Google Maps MCP Server...");
-  Logger.log("📍 18 tools registered (set GOOGLE_MAPS_ENABLED_TOOLS to limit)");
+  Logger.log("📍 Cost-controlled Google Maps tools registered (set GOOGLE_MAPS_ENABLED_TOOLS to limit)");
+  Logger.log(
+    `🔖 Build revision: ${process.env.BUILD_REVISION || "unknown"}; upstream base: ${process.env.UPSTREAM_BASE_COMMIT || "unknown"}`
+  );
   Logger.log(
     "ℹ️  Reminder: enable Places API (New) in https://console.cloud.google.com before using the new Place features."
   );
@@ -58,6 +68,7 @@ export async function startServer(port?: number, apiKey?: string, host?: string)
 
     try {
       const server = new BaseMcpServer(config.name, filterTools(config.tools));
+      activeHttpServers.push(server);
       const serverHost = process.env.MCP_SERVER_HOST || "0.0.0.0";
       Logger.log(`🔧 [${config.name}] Initializing MCP Server in HTTP mode on ${serverHost}:${serverPort}...`);
       await server.startHttpServer(serverPort, serverHost);
@@ -77,6 +88,33 @@ export async function startServer(port?: number, apiKey?: string, host?: string)
   Logger.log("💡 Need help? Check the README.md for configuration details.");
 }
 
+const activeHttpServers: BaseMcpServer[] = [];
+let shutdownPromise: Promise<void> | undefined;
+
+async function shutdownHttpServers(signal: string): Promise<void> {
+  if (shutdownPromise) return shutdownPromise;
+
+  Logger.log(`🛑 Received ${signal}; stopping MCP servers...`);
+  shutdownPromise = Promise.allSettled(activeHttpServers.map((server) => server.stopHttpServer())).then((results) => {
+    const failed = results.filter((result) => result.status === "rejected");
+    activeHttpServers.length = 0;
+    if (failed.length > 0) {
+      Logger.error(`❌ ${failed.length} MCP server shutdown task(s) failed.`);
+      process.exitCode = 1;
+    }
+  });
+  return shutdownPromise;
+}
+
+function installHttpShutdownHandlers(): void {
+  process.once("SIGTERM", () => {
+    void shutdownHttpServers("SIGTERM");
+  });
+  process.once("SIGINT", () => {
+    void shutdownHttpServers("SIGINT");
+  });
+}
+
 // --------------- Exec Mode ---------------
 
 const EXEC_TOOLS = [
@@ -88,16 +126,19 @@ const EXEC_TOOLS = [
   "directions",
   "distance-matrix",
   "elevation",
-  "timezone",
-  "weather",
   "explore-area",
   "plan-route",
   "compare-places",
-  "air-quality",
-  "static-map",
   "batch-geocode-tool",
   "search-along-route",
-  "local-rank-tracker",
+  "maps_create_url",
+  "maps_grounded_search",
+  "maps_resolve_names",
+  "maps_resolve_maps_urls",
+  "maps_transit_itinerary",
+  "maps_plan_transit",
+  "maps_find_places_by_transit",
+  "maps_optimize_transit_errands",
 ] as const;
 
 async function execTool(toolName: string, params: any, apiKey: string): Promise<any> {
@@ -130,7 +171,7 @@ async function execTool(toolName: string, params: any, apiKey: string): Promise<
     case "place-details":
     case "get_place_details":
     case "maps_place_details":
-      return searcher.getPlaceDetails(params.placeId, params.maxPhotos || 0);
+      return searcher.getPlaceDetails(params.placeId, params.include || []);
 
     case "directions":
     case "maps_directions":
@@ -141,7 +182,12 @@ async function execTool(toolName: string, params: any, apiKey: string): Promise<
         params.departure_time,
         params.arrival_time,
         params.avoid_tolls,
-        params.avoid_highways
+        params.avoid_highways,
+        params.traffic,
+        params.alternatives,
+        params.detail_level,
+        params.transit_modes,
+        params.transit_preference
       );
 
     case "distance-matrix":
@@ -152,26 +198,15 @@ async function execTool(toolName: string, params: any, apiKey: string): Promise<
         params.mode,
         params.departure_time,
         params.avoid_tolls,
-        params.avoid_highways
+        params.avoid_highways,
+        params.traffic,
+        params.transit_modes,
+        params.transit_preference
       );
 
     case "elevation":
     case "maps_elevation":
       return searcher.getElevation(params.locations);
-
-    case "timezone":
-    case "maps_timezone":
-      return searcher.getTimezone(params.latitude, params.longitude, params.timestamp);
-
-    case "weather":
-    case "maps_weather":
-      return searcher.getWeather(
-        params.latitude,
-        params.longitude,
-        params.type,
-        params.forecastDays,
-        params.forecastHours
-      );
 
     case "explore-area":
     case "maps_explore_area":
@@ -184,19 +219,6 @@ async function execTool(toolName: string, params: any, apiKey: string): Promise<
     case "compare-places":
     case "maps_compare_places":
       return searcher.comparePlaces(params);
-
-    case "air-quality":
-    case "maps_air_quality":
-      return searcher.getAirQuality(
-        params.latitude,
-        params.longitude,
-        params.includeHealthRecommendations,
-        params.includePollutants
-      );
-
-    case "static-map":
-    case "maps_static_map":
-      return searcher.getStaticMap(params);
 
     case "batch-geocode-tool":
     case "maps_batch_geocode": {
@@ -221,9 +243,29 @@ async function execTool(toolName: string, params: any, apiKey: string): Promise<
     case "maps_search_along_route":
       return searcher.searchAlongRoute(params);
 
-    case "local-rank-tracker":
-    case "maps_local_rank_tracker":
-      return searcher.localRankTracker(params);
+    case "maps_create_url":
+      return CreateUrl.ACTION(params);
+
+    case "maps_grounded_search":
+      return runWithContext({ apiKey }, () => GroundedSearch.ACTION(params));
+
+    case "maps_resolve_names":
+      return runWithContext({ apiKey }, () => ResolveNames.ACTION(params));
+
+    case "maps_resolve_maps_urls":
+      return runWithContext({ apiKey }, () => ResolveMapsUrls.ACTION(params));
+
+    case "maps_transit_itinerary":
+      return runWithContext({ apiKey }, () => TransitItineraryTool.ACTION(params));
+
+    case "maps_plan_transit":
+      return runWithContext({ apiKey }, () => PlanTransit.ACTION(params));
+
+    case "maps_find_places_by_transit":
+      return runWithContext({ apiKey }, () => FindPlacesByTransit.ACTION(params));
+
+    case "maps_optimize_transit_errands":
+      return runWithContext({ apiKey }, () => OptimizeTransitErrands.ACTION(params));
 
     default:
       throw new Error(`Unknown tool: ${toolName}. Available: ${EXEC_TOOLS.join(", ")}`);
@@ -266,12 +308,6 @@ if (isRunDirectly || isMainModule) {
             type: "string",
             describe: "JSON parameters string",
           })
-          .option("apikey", {
-            alias: "k",
-            type: "string",
-            description: "Google Maps API key",
-            default: process.env.GOOGLE_MAPS_API_KEY,
-          })
           .example([
             ['$0 exec geocode \'{"address":"Tokyo Tower"}\'', "Geocode an address"],
             [
@@ -282,11 +318,11 @@ if (isRunDirectly || isMainModule) {
           ]);
       },
       async (argv) => {
-        if (!argv.apikey) {
+        if (!process.env.GOOGLE_MAPS_API_KEY) {
           process.stderr.write(
             JSON.stringify(
               {
-                error: "GOOGLE_MAPS_API_KEY not set. Use --apikey or set GOOGLE_MAPS_API_KEY environment variable.",
+                error: "GOOGLE_MAPS_API_KEY is not set in the process environment.",
               },
               null,
               2
@@ -297,7 +333,7 @@ if (isRunDirectly || isMainModule) {
         }
         try {
           const params = argv.params ? JSON.parse(argv.params as string) : {};
-          const result = await execTool(argv.tool as string, params, argv.apikey as string);
+          const result = await execTool(argv.tool as string, params, process.env.GOOGLE_MAPS_API_KEY);
           process.stdout.write(JSON.stringify(result, null, 2) + "\n");
         } catch (error: any) {
           process.stderr.write(JSON.stringify({ error: error.message }, null, 2) + "\n");
@@ -327,12 +363,6 @@ if (isRunDirectly || isMainModule) {
             describe: "Max parallel requests",
             default: 20,
           })
-          .option("apikey", {
-            alias: "k",
-            type: "string",
-            description: "Google Maps API key",
-            default: process.env.GOOGLE_MAPS_API_KEY,
-          })
           .example([
             ["$0 batch-geocode -i addresses.txt", "Geocode to stdout"],
             ["$0 batch-geocode -i addresses.txt -o results.json", "Geocode to file"],
@@ -340,8 +370,8 @@ if (isRunDirectly || isMainModule) {
           ]);
       },
       async (argv) => {
-        if (!argv.apikey) {
-          console.error("Error: GOOGLE_MAPS_API_KEY not set. Use --apikey or set env var.");
+        if (!process.env.GOOGLE_MAPS_API_KEY) {
+          console.error("Error: GOOGLE_MAPS_API_KEY is not set in the process environment.");
           process.exit(1);
         }
 
@@ -371,7 +401,7 @@ if (isRunDirectly || isMainModule) {
           process.exit(1);
         }
 
-        const searcher = new PlacesSearcher(argv.apikey as string);
+        const searcher = new PlacesSearcher(process.env.GOOGLE_MAPS_API_KEY);
         const concurrency = Math.min(Math.max(argv.concurrency as number, 1), 50);
         const results: any[] = [];
         let completed = 0;
@@ -442,12 +472,6 @@ if (isRunDirectly || isMainModule) {
             description: "Hostname to bind the server to (e.g. 0.0.0.0 for all interfaces)",
             default: process.env.MCP_SERVER_HOST || "0.0.0.0",
           })
-          .option("apikey", {
-            alias: "k",
-            type: "string",
-            description: "Google Maps API key",
-            default: process.env.GOOGLE_MAPS_API_KEY,
-          })
           .option("stdio", {
             type: "boolean",
             description: "Use stdio transport instead of HTTP",
@@ -455,16 +479,12 @@ if (isRunDirectly || isMainModule) {
           })
           .example([
             ["$0", "Start HTTP server with default settings"],
-            ['$0 --port 3000 --apikey "your_api_key"', "Start HTTP with custom port and API key"],
+            ["$0 --port 3000 --host 127.0.0.1", "Start HTTP with an explicit local bind address"],
             ["$0 --host 0.0.0.0 --port 3000", "Start HTTP accessible from all interfaces"],
             ["$0 --stdio", "Start in stdio mode (for Claude Desktop, Cursor, etc.)"],
           ]);
       },
       async (argv) => {
-        if (argv.apikey) {
-          process.env.GOOGLE_MAPS_API_KEY = argv.apikey as string;
-        }
-
         const tools = filterTools(serverConfigs[0].tools);
 
         if (argv.stdio) {
@@ -476,14 +496,15 @@ if (isRunDirectly || isMainModule) {
           Logger.log("🗺️  Google Maps MCP Server");
           Logger.log("   A Model Context Protocol server for Google Maps services");
           Logger.log("");
+          installHttpShutdownHandlers();
 
-          if (!argv.apikey) {
+          if (!process.env.GOOGLE_MAPS_API_KEY) {
             Logger.log("⚠️  Google Maps API Key not found!");
-            Logger.log("   Please provide --apikey parameter or set GOOGLE_MAPS_API_KEY in your .env file");
+            Logger.log("   Set GOOGLE_MAPS_API_KEY in the protected process environment");
             Logger.log("");
           }
 
-          startServer(argv.port as number, argv.apikey as string, argv.host as string).catch((error) => {
+          startServer(argv.port as number, argv.host as string).catch((error) => {
             Logger.error("❌ Failed to start server:", error);
             process.exit(1);
           });
