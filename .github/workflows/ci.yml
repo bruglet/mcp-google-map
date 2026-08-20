@@ -228,7 +228,7 @@ jobs:
       - name: Verify anonymous GHCR pull
         run: |
           set -euo pipefail
-          curl --fail --silent --show-error --retry 3 \
-            -H 'Accept: application/vnd.oci.image.index.v1+json' \
-            https://ghcr.io/v2/bruglet/mcp-google-map/manifests/main \
-            >/dev/null
+          docker logout ghcr.io >/dev/null 2>&1 || true
+          docker buildx imagetools inspect "${IMAGE_NAME}:main" | tee ghcr-manifest.txt
+          grep -q 'linux/amd64' ghcr-manifest.txt
+          grep -q 'linux/arm64' ghcr-manifest.txt
