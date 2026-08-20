@@ -201,16 +201,19 @@ async function testListTools(session: McpSession): Promise<void> {
     "maps_directions",
     "maps_elevation",
     "maps_search_places",
-    "maps_timezone",
-    "maps_weather",
-    "maps_air_quality",
-    "maps_static_map",
+    "maps_create_url",
+    "maps_grounded_search",
+    "maps_resolve_names",
+    "maps_resolve_maps_urls",
     "maps_batch_geocode",
     "maps_search_along_route",
     "maps_explore_area",
     "maps_plan_route",
     "maps_compare_places",
-    "maps_local_rank_tracker",
+    "maps_transit_itinerary",
+    "maps_plan_transit",
+    "maps_find_places_by_transit",
+    "maps_optimize_transit_errands",
   ];
 
   for (const name of expectedTools) {
@@ -358,8 +361,6 @@ async function testToolCalls(session: McpSession): Promise<void> {
     const text = nearbyContent[0]?.text ?? "";
     let valid = false;
     try {
-      // Response format: "location: {...}\n[...]"
-      const lines = text.split("\n");
       // Find the JSON array part (skip the "location: ..." prefix line)
       const jsonStart = text.indexOf("[");
       if (jsonStart !== -1) {
@@ -395,46 +396,6 @@ async function testToolCalls(session: McpSession): Promise<void> {
     assert(valid, "Search places returns results with name field", valid ? undefined : `got: ${text.slice(0, 300)}`);
   }
 
-  // Test timezone
-  const tzResult = await sendRequest(session, "tools/call", {
-    name: "maps_timezone",
-    arguments: { latitude: 35.6586, longitude: 139.7454 },
-  });
-  const tzContent = tzResult?.result?.content ?? [];
-  assert(tzContent.length > 0, "Timezone returns content");
-  if (tzContent.length > 0) {
-    let valid = false;
-    try {
-      const parsed = JSON.parse(tzContent[0].text);
-      valid = parsed?.timeZoneId === "Asia/Tokyo";
-    } catch {
-      /* ignore parse errors */
-    }
-    assert(valid, "Timezone returns Asia/Tokyo");
-  }
-
-  // Test weather (use US coordinates — Japan is unsupported by Weather API)
-  const weatherResult = await sendRequest(session, "tools/call", {
-    name: "maps_weather",
-    arguments: { latitude: 37.422, longitude: -122.0841 },
-  });
-  const weatherContent = weatherResult?.result?.content ?? [];
-  assert(weatherContent.length > 0, "Weather returns content");
-  if (weatherContent.length > 0) {
-    let valid = false;
-    try {
-      const parsed = JSON.parse(weatherContent[0].text);
-      valid = parsed?.temperature !== undefined;
-    } catch {
-      /* ignore parse errors */
-    }
-    if (!valid) {
-      console.log("  ⚠️  Weather returned non-temperature data (API may not be enabled)");
-    }
-    // Don't fail the test if Weather API isn't enabled — it's optional
-    assert(true, "Weather tool callable");
-  }
-
   // Test distance matrix
   const distResult = await sendRequest(session, "tools/call", {
     name: "maps_distance_matrix",
@@ -451,43 +412,6 @@ async function testToolCalls(session: McpSession): Promise<void> {
       /* ignore parse errors */
     }
     assert(valid, "Distance matrix returns distances and durations");
-  }
-
-  // Test air quality (Tokyo — supported unlike weather)
-  const aqResult = await sendRequest(session, "tools/call", {
-    name: "maps_air_quality",
-    arguments: { latitude: 35.6762, longitude: 139.6503 },
-  });
-  const aqContent = aqResult?.result?.content ?? [];
-  assert(aqContent.length > 0, "Air quality returns content");
-  if (aqContent.length > 0) {
-    let valid = false;
-    try {
-      const parsed = JSON.parse(aqContent[0].text);
-      valid = typeof parsed?.aqi === "number" && parsed?.category !== undefined;
-    } catch {
-      /* ignore parse errors */
-    }
-    if (!valid) {
-      console.log("  ⚠️  Air quality returned unexpected data (API may not be enabled)");
-    }
-    assert(true, "Air quality tool callable");
-  }
-
-  // Test static map
-  const mapResult = await sendRequest(session, "tools/call", {
-    name: "maps_static_map",
-    arguments: { center: "Tokyo Tower", zoom: 14 },
-  });
-  const mapContent = mapResult?.result?.content ?? [];
-  assert(mapContent.length > 0, "Static map returns content");
-  if (mapContent.length > 0) {
-    const imageContent = mapContent.find((c: any) => c.type === "image");
-    assert(imageContent !== undefined, "Static map returns image content type");
-    if (imageContent) {
-      assert(imageContent.mimeType === "image/png", "Static map returns PNG");
-      assert(typeof imageContent.data === "string" && imageContent.data.length > 100, "Static map returns base64 data");
-    }
   }
 
   // Test batch geocode
@@ -531,122 +455,59 @@ async function testToolCalls(session: McpSession): Promise<void> {
     }
     assert(valid, "Search along route returns places and route polyline");
   }
-
-  // Test local rank tracker (3x3 grid around Tokyo Tower with keyword "restaurant")
-  // First get a place_id via search
-  const rankSearchResult = await sendRequest(session, "tools/call", {
-    name: "maps_search_places",
-    arguments: {
-      query: "restaurant near Tokyo Tower",
-      locationBias: { latitude: 35.6586, longitude: 139.7454, radius: 500 },
-    },
-  });
-  const rankSearchContent = rankSearchResult?.result?.content ?? [];
-  if (rankSearchContent.length > 0) {
-    let targetPlaceId = "";
-    try {
-      const parsed = JSON.parse(rankSearchContent[0].text);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        targetPlaceId = parsed[0].place_id;
-      }
-    } catch {
-      /* ignore */
-    }
-
-    if (targetPlaceId) {
-      const rankResult = await sendRequest(session, "tools/call", {
-        name: "maps_local_rank_tracker",
-        arguments: {
-          keyword: "restaurant",
-          placeId: targetPlaceId,
-          center: { latitude: 35.6586, longitude: 139.7454 },
-          gridSize: 3,
-          gridSpacing: 500,
-        },
-      });
-      const rankContent = rankResult?.result?.content ?? [];
-      assert(rankContent.length > 0, "Local rank tracker returns content");
-      if (rankContent.length > 0) {
-        let valid = false;
-        let details = "";
-        try {
-          const parsed = JSON.parse(rankContent[0].text);
-          const hasTarget = parsed?.target?.place_id === targetPlaceId;
-          const hasGrid = Array.isArray(parsed?.grid) && parsed.grid.length === 9;
-          const hasMetrics = parsed?.metrics?.solv !== undefined && parsed?.metrics?.atrp !== undefined;
-          const hasGridSize = parsed?.grid_size === "3x3";
-          valid = hasTarget && hasGrid && hasMetrics && hasGridSize;
-          details = `target=${hasTarget}, grid=${hasGrid}(len=${parsed?.grid?.length}), metrics=${hasMetrics}, size=${hasGridSize}`;
-        } catch {
-          /* ignore parse errors */
-        }
-        assert(valid, "Local rank tracker returns valid grid with metrics", valid ? undefined : details);
-      }
-    } else {
-      console.log("  ⏭️  Local rank tracker test skipped (no place_id from search)");
-    }
-  }
 }
 
-async function testPlaceDetailsPhotos(session: McpSession): Promise<void> {
-  console.log("\n🧪 Test 4b: Place details with photos");
+async function testPlaceDetailsMinimal(session: McpSession): Promise<void> {
+  console.log("\n🧪 Test 4b: Minimal Places search and details");
 
-  // First search for a place to get a place_id
+  if (!API_KEY) {
+    console.log("  ⏭️  Skipped (no GOOGLE_MAPS_API_KEY)");
+    return;
+  }
+
   const searchResult = await sendRequest(session, "tools/call", {
     name: "maps_search_places",
     arguments: { query: "Tokyo Tower" },
   });
   const searchContent = searchResult?.result?.content ?? [];
   assert(searchContent.length > 0, "Search returns content for place_id");
-  const places = JSON.parse(searchContent[0].text);
-  const placeId = places[0]?.place_id;
-  assert(typeof placeId === "string" && placeId.length > 0, "Got valid place_id from search");
-  // Verify search results include primary_type
-  assert("primary_type" in places[0], "search results include primary_type");
-  assert("price_level" in places[0], "search results include price_level");
+  if (searchContent.length === 0) return;
 
-  // Test without maxPhotos — should return photo_count but no photos array
-  const detailsNoPhoto = await sendRequest(session, "tools/call", {
+  const places = JSON.parse(searchContent[0].text);
+  const firstPlace = places[0];
+  const placeId = firstPlace?.place_id;
+  assert(typeof placeId === "string" && placeId.length > 0, "Search returns a Place ID");
+  assert(typeof firstPlace?.google_maps_url === "string", "Search returns a local Maps URL");
+  for (const field of ["rating", "total_ratings", "price_level", "open_now"]) {
+    assert(!(field in firstPlace), `Search omits ${field} by default`);
+  }
+
+  const detailsResult = await sendRequest(session, "tools/call", {
     name: "maps_place_details",
     arguments: { placeId },
   });
-  const noPhotoData = JSON.parse(detailsNoPhoto.result.content[0].text);
-  assert(typeof noPhotoData.photo_count === "number", "place_details returns photo_count");
-  assert(noPhotoData.photos === undefined, "place_details without maxPhotos omits photos array");
-  assert(typeof noPhotoData.name === "string", "place_details returns name");
-  assert(typeof noPhotoData.rating === "number", "place_details returns rating");
+  const detailsContent = detailsResult?.result?.content ?? [];
+  assert(detailsContent.length > 0, "Place details returns content");
+  if (detailsContent.length === 0) return;
 
-  // Verify new place attribute fields
-  assert(Array.isArray(noPhotoData.types), "place_details returns types array");
-  assert(
-    noPhotoData.primary_type === null || typeof noPhotoData.primary_type === "string",
-    "place_details returns primary_type"
-  );
-  assert(
-    noPhotoData.editorial_summary === null || typeof noPhotoData.editorial_summary === "string",
-    "place_details returns editorial_summary"
-  );
-  // opening_hours should be an object with weekday_text when available
-  if (noPhotoData.opening_hours) {
-    assert(typeof noPhotoData.opening_hours === "object", "place_details opening_hours is object");
+  const details = JSON.parse(detailsContent[0].text);
+  assert(typeof details?.name === "string", "Place details returns identity");
+  assert(details?.location !== undefined, "Place details returns location");
+  assert(typeof details?.google_maps_url === "string", "Place details returns a local Maps URL");
+  for (const field of [
+    "rating",
+    "total_ratings",
+    "opening_hours",
+    "phone",
+    "website",
+    "price_level",
+    "reviews",
+    "parking",
+    "atmosphere",
+    "editorial_summary",
+  ]) {
+    assert(!(field in details), `Place details omits ${field} by default`);
   }
-  // reviews should have language field
-  if (noPhotoData.reviews?.length > 0) {
-    assert("language" in noPhotoData.reviews[0], "reviews include language field");
-  }
-
-  // Test with maxPhotos=1 — should return photos array with URLs
-  const detailsWithPhoto = await sendRequest(session, "tools/call", {
-    name: "maps_place_details",
-    arguments: { placeId, maxPhotos: 1 },
-  });
-  const withPhotoData = JSON.parse(detailsWithPhoto.result.content[0].text);
-  assert(withPhotoData.photo_count > 0, "place has photos available");
-  assert(Array.isArray(withPhotoData.photos), "maxPhotos=1 returns photos array");
-  assert(withPhotoData.photos.length === 1, "maxPhotos=1 returns exactly 1 photo");
-  assert(withPhotoData.photos[0].url.startsWith("https://"), "photo URL is a valid HTTPS URL");
-  assert(typeof withPhotoData.photos[0].width === "number", "photo has width");
-  assert(typeof withPhotoData.photos[0].height === "number", "photo has height");
 }
 
 async function testMultiSession(): Promise<void> {
@@ -886,6 +747,7 @@ async function testExecMode(): Promise<void> {
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "pipe"],
       timeout: 5000,
+      env: { ...process.env, GOOGLE_MAPS_API_KEY: "ci-placeholder" },
     });
     assert(false, "exec unknown tool exits with error");
   } catch (err: any) {
@@ -928,36 +790,6 @@ async function testExecMode(): Promise<void> {
     assert(false, "exec search-places returns valid JSON", searchOut.slice(0, 200));
   }
 
-  // Test: exec air-quality (may be unavailable in some regions/CI)
-  const aqOut = execArgs("air-quality", '{"latitude":35.6762,"longitude":139.6503}');
-  try {
-    const parsed = JSON.parse(aqOut);
-    if (parsed?.success === true) {
-      assert(true, "exec air-quality succeeds");
-      assert(typeof parsed?.data?.aqi === "number", "exec air-quality returns AQI");
-    } else {
-      console.log("  ⚠️  Air quality API unavailable in exec mode (service may be temporarily down)");
-      assert(true, "exec air-quality callable (service unavailable)");
-      assert(true, "exec air-quality skipped AQI check");
-    }
-  } catch {
-    assert(false, "exec air-quality returns valid JSON", aqOut.slice(0, 200));
-  }
-
-  // Test: exec static-map
-  const mapOut = execArgs("static-map", '{"center":"Tokyo Tower","zoom":14}');
-  try {
-    const parsed = JSON.parse(mapOut);
-    assert(parsed?.success === true, "exec static-map succeeds");
-    assert(
-      typeof parsed?.data?.base64 === "string" && parsed.data.base64.length > 100,
-      "exec static-map returns base64"
-    );
-    assert(parsed?.data?.dimensions === "600x400", "exec static-map returns correct dimensions");
-  } catch {
-    assert(false, "exec static-map returns valid JSON", mapOut.slice(0, 200));
-  }
-
   // Test: batch-geocode
   const { writeFileSync, unlinkSync } = await import("node:fs");
   const tmpFile = resolve(import.meta.dirname ?? ".", "test-addresses.tmp");
@@ -984,114 +816,65 @@ async function testExecMode(): Promise<void> {
 
 // --------------- Test 8: Transit Error Messages ---------------
 
-async function testTransitErrorMessages(session: McpSession): Promise<void> {
-  console.log("\n🧪 Test 8: Transit error messages for unsupported regions");
+async function testRoutePolicyErrors(session: McpSession): Promise<void> {
+  console.log("\n🧪 Test 8: Route policy validation");
 
   if (!API_KEY) {
     console.log("  ⏭️  Skipped (no GOOGLE_MAPS_API_KEY)");
     return;
   }
 
-  // Verify driving mode works fine first (baseline)
-  const driveResult = await sendRequest(session, "tools/call", {
-    name: "maps_directions",
-    arguments: { origin: "Tokyo Station", destination: "Nagoya Station", mode: "driving" },
-  });
-  const driveContent = driveResult?.result?.content ?? [];
-  assert(driveContent.length > 0, "Driving directions returns content");
-  if (driveContent.length > 0) {
-    const text = driveContent[0]?.text ?? "";
-    const isError = driveResult?.result?.isError === true;
-    assert(!isError, "Driving directions in Japan works (no error)", isError ? text.slice(0, 150) : undefined);
-    if (!isError) {
-      try {
-        const parsed = JSON.parse(text);
-        assert(parsed?.total_distance !== undefined, "Driving returns total_distance");
-        assert(parsed?.total_duration !== undefined, "Driving returns total_duration");
-      } catch {
-        assert(false, "Driving directions returns valid JSON");
-      }
-    }
-  }
-
-  // Test directions with transit in Japan — should return improved error message
-  const dirResult = await sendRequest(session, "tools/call", {
-    name: "maps_directions",
-    arguments: { origin: "Tokyo Station", destination: "Nagoya Station", mode: "transit" },
-  });
-  const dirContent = dirResult?.result?.content ?? [];
-  assert(dirContent.length > 0, "Transit directions returns content");
-  if (dirContent.length > 0) {
-    const text = dirContent[0]?.text ?? "";
-    const isError = dirResult?.result?.isError === true;
-    assert(isError, "Transit directions in Japan returns isError=true");
-    assert(
-      text.includes("does not support transit") || text.includes("transit route"),
-      "Error message mentions transit limitation",
-      `got: ${text.slice(0, 200)}`
-    );
-    assert(
-      text.includes("Japan") || text.includes("region"),
-      "Error message mentions affected region",
-      `got: ${text.slice(0, 200)}`
-    );
-  }
-
-  // Test distance matrix with transit in Japan
-  const dmResult = await sendRequest(session, "tools/call", {
-    name: "maps_distance_matrix",
-    arguments: { origins: ["Tokyo Station"], destinations: ["Nagoya Station"], mode: "transit" },
-  });
-  const dmContent = dmResult?.result?.content ?? [];
-  assert(dmContent.length > 0, "Transit distance matrix returns content");
-  if (dmContent.length > 0) {
-    const text = dmContent[0]?.text ?? "";
-    const isError = dmResult?.result?.isError === true;
-    // May return error (all-fail) or warning (partial-fail)
-    if (isError) {
-      assert(
-        text.includes("does not support transit") || text.includes("transit route"),
-        "Distance matrix error mentions transit limitation",
-        `got: ${text.slice(0, 200)}`
-      );
-    } else {
-      // Partial success — check for warning in response
-      try {
-        const parsed = JSON.parse(text);
-        const hasWarning = parsed?.warning !== undefined;
-        const hasNulls = parsed?.distances?.[0]?.[0] === null;
-        assert(
-          hasWarning || hasNulls,
-          "Distance matrix returns warning or null entries for unsupported transit",
-          `warning=${hasWarning}, nulls=${hasNulls}`
-        );
-      } catch {
-        assert(false, "Distance matrix returns valid JSON", text.slice(0, 200));
-      }
-    }
-  }
-
-  const avoidResult = await sendRequest(session, "tools/call", {
+  const walkingTraffic = await sendRequest(session, "tools/call", {
     name: "maps_directions",
     arguments: {
       origin: "Tokyo Station",
-      destination: "Nagoya Station",
+      destination: "Imperial Palace",
       mode: "walking",
-      avoid_highways: true,
+      traffic: "aware",
     },
   });
-  const avoidContent = avoidResult?.result?.content ?? [];
-  assert(avoidContent.length > 0, "Invalid route modifiers returns content");
-  if (avoidContent.length > 0) {
-    const text = avoidContent[0]?.text ?? "";
-    const isError = avoidResult?.result?.isError === true;
-    assert(isError, "Non-driving route modifiers return isError=true");
-    assert(
-      text.includes('only supported with mode "driving"'),
-      "Non-driving route modifiers return clear error",
-      `got: ${text.slice(0, 200)}`
-    );
-  }
+  const walkingTrafficText = walkingTraffic?.result?.content?.[0]?.text ?? "";
+  assert(walkingTraffic?.result?.isError === true, "Walking traffic preference is rejected");
+  assert(
+    walkingTrafficText.includes("only supported with mode driving"),
+    "Walking traffic rejection explains the mode restriction",
+    walkingTrafficText.slice(0, 200)
+  );
+
+  const bothTimes = await sendRequest(session, "tools/call", {
+    name: "maps_directions",
+    arguments: {
+      origin: "Tokyo Station",
+      destination: "Imperial Palace",
+      mode: "driving",
+      departure_time: "2026-08-20T09:00:00Z",
+      arrival_time: "2026-08-20T10:00:00Z",
+    },
+  });
+  const bothTimesText = bothTimes?.result?.content?.[0]?.text ?? "";
+  assert(bothTimes?.result?.isError === true, "Departure and arrival together are rejected");
+  assert(
+    bothTimesText.includes("mutually exclusive"),
+    "Time conflict explains the mutually exclusive parameters",
+    bothTimesText.slice(0, 200)
+  );
+
+  const walkingTransitPreference = await sendRequest(session, "tools/call", {
+    name: "maps_distance_matrix",
+    arguments: {
+      origins: ["Tokyo Station"],
+      destinations: ["Imperial Palace"],
+      mode: "walking",
+      transit_preference: "fewer_transfers",
+    },
+  });
+  const walkingTransitText = walkingTransitPreference?.result?.content?.[0]?.text ?? "";
+  assert(walkingTransitPreference?.result?.isError === true, "Transit preference on walking is rejected");
+  assert(
+    walkingTransitText.includes("require mode transit"),
+    "Transit preference rejection explains the mode restriction",
+    walkingTransitText.slice(0, 200)
+  );
 }
 
 async function testTransitDetailsField(session: McpSession): Promise<void> {
@@ -1161,8 +944,8 @@ async function main() {
     await testListTools(session);
     await testGeocode(session);
     await testToolCalls(session);
-    await testPlaceDetailsPhotos(session);
-    await testTransitErrorMessages(session);
+    await testPlaceDetailsMinimal(session);
+    await testRoutePolicyErrors(session);
     await testTransitDetailsField(session);
     await testMultiSession();
   } catch (err) {
