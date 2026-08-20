@@ -107,7 +107,17 @@ test("Cloudflare JWT validation accepts only a valid RS256 issuer and audience",
     cloudflareAuthMiddleware(request("127.0.0.1", token), result as any, () => {
       nextCalled = true;
     });
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise<void>((resolve) => {
+      const deadline = Date.now() + 1000;
+      const check = () => {
+        if (nextCalled || result.statusCode !== 200 || Date.now() >= deadline) {
+          resolve();
+          return;
+        }
+        setTimeout(check, 10);
+      };
+      check();
+    });
     return { statusCode: result.statusCode, nextCalled };
   };
 
