@@ -61,8 +61,9 @@ Composite planners expose only `planner_mode=conservative|thorough`. The mounted
 The supported deployment is a rootless Podman Quadlet in the `host` user’s systemd instance. The container runs as UID/GID `10001`, with a read-only root filesystem, dropped capabilities, no-new-privileges, bounded memory/process counts, and only the usage ledger mounted writable. The MCP binds to the host loopback only; the existing host-networked cloudflared container should use `http://localhost:3020` as its origin.
 
 ```bash
-cp deploy/mcp-google-map.env.example ~/.config/mcp-google-map/mcp-google-map.env
-chmod 600 ~/.config/mcp-google-map/mcp-google-map.env
+mkdir -p ~/.config/mcp-google-map
+cp deploy/mcp-google-map.env.example ~/.config/mcp-google-map/env
+chmod 600 ~/.config/mcp-google-map/env
 ./deploy/install-rootless-quadlet.sh
 ```
 

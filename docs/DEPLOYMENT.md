@@ -6,7 +6,7 @@ The expected service files are:
 
 ```text
 ~/.config/containers/systemd/mcp-google-map.container
-~/.config/mcp-google-map/mcp-google-map.env
+~/.config/mcp-google-map/env
 ~/.local/state/mcp-google-map/
 ```
 
@@ -26,7 +26,7 @@ The existing host-networked `cloudflared` container should use `http://localhost
 
 ## Install
 
-Copy `deploy/mcp-google-map.env.example` to the host environment-file path, replace all values, and set mode 600. Then run `deploy/install-rootless-quadlet.sh` as the `host` user.
+Copy `deploy/mcp-google-map.env.example` to `~/.config/mcp-google-map/env`, replace all values, and set mode 600. Then run `deploy/install-rootless-quadlet.sh` as the `host` user.
 
 The installer refuses placeholder values, installs the Quadlet under the user systemd instance, and uses `podman unshare chown` only on `~/.local/state/mcp-google-map` so the image UID 10001 can write its counter file. It does not create a root-owned service, modify unrelated ownership, create a Podman network, or install cloudflared.
 

@@ -5,19 +5,20 @@ project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 quadlet_dir="${HOME}/.config/containers/systemd"
 config_dir="${HOME}/.config/mcp-google-map"
 state_dir="${HOME}/.local/state/mcp-google-map"
+env_file="${config_dir}/env"
 
 mkdir -p "${quadlet_dir}" "${config_dir}" "${state_dir}"
 chmod 700 "${config_dir}" "${state_dir}"
 
-if [[ ! -f "${config_dir}/mcp-google-map.env" ]]; then
-  install -m 600 "${project_root}/deploy/mcp-google-map.env.example" "${config_dir}/mcp-google-map.env"
-  echo "Populate ${config_dir}/mcp-google-map.env before starting the service." >&2
+if [[ ! -f "${env_file}" ]]; then
+  install -m 600 "${project_root}/deploy/mcp-google-map.env.example" "${env_file}"
+  echo "Populate ${env_file} before starting the service." >&2
   exit 1
 fi
 
-chmod 600 "${config_dir}/mcp-google-map.env"
-if grep -Eq 'replace-(with|me)|your-team' "${config_dir}/mcp-google-map.env"; then
-  echo "Refusing to start with placeholder values in ${config_dir}/mcp-google-map.env." >&2
+chmod 600 "${env_file}"
+if grep -Eq 'replace-(with|me)|your-team' "${env_file}"; then
+  echo "Refusing to start with placeholder values in ${env_file}." >&2
   exit 1
 fi
 
