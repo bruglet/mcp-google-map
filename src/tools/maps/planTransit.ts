@@ -33,7 +33,7 @@ async function ACTION(params: PlanTransitParams): Promise<{ content: any[]; isEr
     const resolved = await locationInputsToStrings(
       allLocations,
       allLocations.some((location) => location.kind === "maps_url")
-        ? (urls) => new GroundingLiteService(getCurrentApiKey()).resolveMapsUrlsToPlaceIds(urls)
+        ? (urls) => new GroundingLiteService(getCurrentApiKey()).resolveMapsUrlsToPlaceIds(urls, "maps_plan_transit")
         : undefined
     );
     const service = new TransitItineraryService(new RoutesService(getCurrentApiKey()));

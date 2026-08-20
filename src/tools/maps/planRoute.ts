@@ -4,16 +4,20 @@ import { getCurrentApiKey } from "../../utils/requestContext.js";
 
 const NAME = "maps_plan_route";
 const DESCRIPTION =
-  "Plan an optimized multi-stop route in one call — geocodes all stops, uses explicit Routes API waypoint optimization (up to 25 intermediate stops), and returns compact leg directions. Use when the user says 'visit these 5 places efficiently', 'plan a route through A, B, C', or needs a multi-stop itinerary. Departure time provides schedule context; traffic-aware routing is not enabled implicitly. Transit uses the time-propagating itinerary planner.";
+  "Plan a bounded multi-stop route in one call using the caller's addresses, coordinates, or Place IDs directly. Waypoint reordering is opt-in because it promotes the Routes request; the default preserves the supplied order and returns compact leg directions. planner_mode=conservative allows up to 8 intermediate stops and thorough up to 16. Use when the user says 'visit these 5 places efficiently', 'plan a route through A, B, C', or needs a multi-stop itinerary. Departure time provides schedule context; traffic-aware routing is not enabled implicitly. Transit uses the time-propagating itinerary planner.";
 
 const SCHEMA = {
-  stops: z.array(z.string()).min(2).describe("List of addresses or landmarks to visit (minimum 2)"),
+  stops: z
+    .array(z.string())
+    .min(2)
+    .max(18)
+    .describe("List of addresses or landmarks to visit (minimum 2; planner-capped)"),
   mode: z.enum(["driving", "walking", "bicycling", "transit"]).optional().describe("Travel mode (default: driving)"),
   optimize: z
     .boolean()
-    .optional()
+    .default(false)
     .describe(
-      "Auto-optimize visit order via Routes API waypoint optimization (default: true). Set false to keep original order. Not available for transit mode."
+      "Auto-optimize visit order via Routes API waypoint optimization. This is a higher-tier option; default false keeps the supplied order. Not available for transit mode."
     ),
   departure_time: z
     .string()
@@ -29,6 +33,7 @@ const SCHEMA = {
     .boolean()
     .optional()
     .describe('Avoid highways where reasonable. Only supported with mode "driving".'),
+  planner_mode: z.enum(["conservative", "thorough"]).default("conservative"),
 };
 
 export type PlanRouteParams = z.infer<z.ZodObject<typeof SCHEMA>>;

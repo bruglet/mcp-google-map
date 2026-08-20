@@ -1,4 +1,4 @@
-import { withAccounting } from "./requestAccounting.js";
+import { assertMatrixLimit, withAccounting } from "./requestAccounting.js";
 
 const ROUTES_API_BASE = "https://routes.googleapis.com";
 
@@ -163,6 +163,7 @@ export class RoutesService {
     detailLevel?: RouteDetailLevel;
     transitModes?: TransitMode[];
     transitPreference?: TransitPreference;
+    parentTool?: string;
   }): Promise<{
     routes: any[];
     summary: string;
@@ -191,14 +192,18 @@ export class RoutesService {
     if (params.optimizeWaypointOrder && params.intermediates?.length && travelMode !== "TRANSIT")
       requestBody.optimizeWaypointOrder = true;
 
-    const tier = travelMode === "DRIVE" && params.traffic && params.traffic !== "none" ? "T2" : "T1";
+    const tier =
+      Boolean(params.optimizeWaypointOrder) ||
+      (travelMode === "DRIVE" && Boolean(params.traffic && params.traffic !== "none"))
+        ? "T2"
+        : "T1";
     const response = await withAccounting(
       {
         api: "routes",
         operation: "computeRoutes",
         tier,
         units: 1,
-        parentTool: "maps_directions",
+        parentTool: params.parentTool || "maps_directions",
         reason: `${params.mode || "driving"} ${detailLevel} route`,
         fanout: "S",
       },
@@ -245,6 +250,7 @@ export class RoutesService {
     traffic?: TrafficMode;
     transitModes?: TransitMode[];
     transitPreference?: TransitPreference;
+    parentTool?: string;
   }): Promise<{
     distances: any[][];
     durations: any[][];
@@ -254,11 +260,7 @@ export class RoutesService {
   }> {
     const travelMode = TRAVEL_MODE_MAP[params.mode || "driving"] || "DRIVE";
     const totalPairs = params.origins.length * params.destinations.length;
-    const hardLimit = travelMode === "TRANSIT" || params.traffic === "optimal" ? 100 : 625;
-    if (totalPairs > hardLimit)
-      throw new Error(
-        `Route Matrix request has ${totalPairs} elements; the Google limit for this request is ${hardLimit}.`
-      );
+    assertMatrixLimit(params.origins.length, params.destinations.length, 100);
     const requestBody: any = {
       origins: params.origins.map((origin) => ({ waypoint: toWaypoint(origin) })),
       destinations: params.destinations.map((destination) => ({ waypoint: toWaypoint(destination) })),
@@ -276,7 +278,7 @@ export class RoutesService {
         operation: "computeRouteMatrix",
         tier,
         units: totalPairs,
-        parentTool: "maps_distance_matrix",
+        parentTool: params.parentTool || "maps_distance_matrix",
         reason: `${params.mode || "driving"} matrix`,
         fanout: totalPairs > 20 ? "L" : "M",
       },

@@ -36,6 +36,8 @@ export interface TransitItinerary {
 }
 
 export class TransitItineraryService {
+  private readonly routeCache = new Map<string, Promise<Awaited<ReturnType<RoutesService["computeRoutes"]>>>>();
+
   constructor(private readonly routesService: RoutesService) {}
 
   async routeFixedPath(params: {
@@ -46,8 +48,15 @@ export class TransitItineraryService {
     transitModes?: TransitMode[];
     transitPreference?: TransitPreference;
     objective?: TransitItinerary["objective"];
+    plannerMode?: PlannerMode;
+    parentTool?: string;
   }): Promise<TransitItinerary> {
     if (params.locations.length < 2) throw new Error("A transit itinerary requires at least two locations.");
+    const limits = plannerLimits(params.plannerMode);
+    if (params.locations.length - 2 > limits.fixedStops)
+      throw new Error(
+        `This itinerary has ${params.locations.length - 2} intermediate stops; the ${params.plannerMode || "conservative"} planner limit is ${limits.fixedStops}.`
+      );
     const initialDeparture = params.departureTime || new Date();
     // Steps are the default for this composite tool because lines, stops, and
     // transfers cannot be derived reliably from a summary-only route.
@@ -59,7 +68,7 @@ export class TransitItineraryService {
     for (let index = 0; index < params.locations.length - 1; index++) {
       const from = params.locations[index];
       const to = params.locations[index + 1];
-      const result = await this.routesService.computeRoutes({
+      const result = await this.computeCachedRoute({
         origin: from,
         destination: to,
         mode: "transit",
@@ -67,6 +76,7 @@ export class TransitItineraryService {
         detailLevel,
         transitModes: params.transitModes,
         transitPreference: params.transitPreference,
+        parentTool: params.parentTool || "maps_transit_itinerary",
       });
       const route = result.routes[0];
       const durationSeconds = result.total_duration.value;
@@ -151,24 +161,34 @@ export class TransitItineraryService {
         `This request has ${params.stops.length} stops; the ${params.plannerMode || "conservative"} planner limit is ${limits.fixedStops}.`
       );
     const final = params.finalDestination || (params.returnToOrigin ? params.origin : undefined);
-    const nodes = [params.origin, ...params.stops, ...(final ? [final] : [])];
-    const matrix = await computeBoundedTransitMatrix(
+    const nodes = [...new Set([params.origin, ...params.stops, ...(final ? [final] : [])])];
+    const matrixEdges = buildFixedStopMatrixEdges(params.origin, params.stops, final);
+    const edgeDurations = await computeTargetedTransitMatrix(
       this.routesService,
+      matrixEdges,
       {
-        origins: nodes,
-        destinations: nodes,
         departureTime: params.departureTime,
         transitModes: params.transitModes,
         transitPreference: params.transitPreference,
+        parentTool: "maps_plan_transit",
       },
       limits.matrixElements
     );
+    const durations = Array.from({ length: nodes.length }, () => Array(nodes.length).fill(null));
+    const nodeIndexes = new Map(nodes.map((node, index) => [node, index]));
+    for (const [key, duration] of edgeDurations) {
+      const [origin, destination] = key.split("\u0000");
+      const originIndex = nodeIndexes.get(origin);
+      const destinationIndex = nodeIndexes.get(destination);
+      if (originIndex !== undefined && destinationIndex !== undefined)
+        durations[originIndex][destinationIndex] = duration;
+    }
     const orders = orderCandidates(
       params.origin,
       params.stops,
       final,
       nodes,
-      matrix.durations,
+      durations,
       params.plannerMode || "conservative"
     );
     const finalists = orders.slice(0, limits.exactRoutes);
@@ -182,6 +202,8 @@ export class TransitItineraryService {
           transitModes: params.transitModes,
           transitPreference: params.transitPreference,
           objective: params.objective,
+          plannerMode: params.plannerMode,
+          parentTool: "maps_plan_transit",
         })
       )
     );
@@ -200,6 +222,21 @@ export class TransitItineraryService {
       fanout: "L",
     });
     return { best: exact[0], alternatives: exact.slice(1, 3), coarseOrders: orders };
+  }
+
+  private computeCachedRoute(
+    params: Parameters<RoutesService["computeRoutes"]>[0]
+  ): Promise<Awaited<ReturnType<RoutesService["computeRoutes"]>>> {
+    const key = JSON.stringify({
+      ...params,
+      departureTime: params.departureTime?.toISOString(),
+      arrivalTime: params.arrivalTime?.toISOString(),
+    });
+    const cached = this.routeCache.get(key);
+    if (cached) return cached;
+    const request = this.routesService.computeRoutes(params);
+    this.routeCache.set(key, request);
+    return request;
   }
 }
 
@@ -458,6 +495,7 @@ export interface TransitMatrixParams {
   departureTime?: Date;
   transitModes?: TransitMode[];
   transitPreference?: TransitPreference;
+  parentTool?: string;
 }
 
 /** Split planner matrices into valid transit requests while guarding total elements. */
@@ -471,25 +509,28 @@ export async function computeBoundedTransitMatrix(
     throw new Error(
       `Transit planner matrix projects ${totalElements} elements, exceeding the ${maxElements}-element ${maxElements <= 100 ? "conservative" : "thorough"} planner guard.`
     );
-  if (params.destinations.length > 100)
-    throw new Error("Transit planner matrices cannot exceed 100 destinations per request.");
-
   const distances = Array.from({ length: params.origins.length }, () => Array(params.destinations.length).fill(null));
   const durations = Array.from({ length: params.origins.length }, () => Array(params.destinations.length).fill(null));
-  const rowsPerRequest = Math.max(1, Math.floor(100 / Math.max(1, params.destinations.length)));
-  for (let start = 0; start < params.origins.length; start += rowsPerRequest) {
-    const rowOrigins = params.origins.slice(start, start + rowsPerRequest);
-    const result = await routesService.computeRouteMatrix({
-      origins: rowOrigins,
-      destinations: params.destinations,
-      mode: "transit",
-      departureTime: params.departureTime,
-      transitModes: params.transitModes,
-      transitPreference: params.transitPreference,
-    });
-    for (let row = 0; row < rowOrigins.length; row++) {
-      distances[start + row] = result.distances[row] || distances[start + row];
-      durations[start + row] = result.durations[row] || durations[start + row];
+  for (let destinationStart = 0; destinationStart < params.destinations.length; destinationStart += 100) {
+    const destinationBatch = params.destinations.slice(destinationStart, destinationStart + 100);
+    const rowsPerRequest = Math.max(1, Math.floor(100 / Math.max(1, destinationBatch.length)));
+    for (let originStart = 0; originStart < params.origins.length; originStart += rowsPerRequest) {
+      const originBatch = params.origins.slice(originStart, originStart + rowsPerRequest);
+      const result = await routesService.computeRouteMatrix({
+        origins: originBatch,
+        destinations: destinationBatch,
+        mode: "transit",
+        departureTime: params.departureTime,
+        transitModes: params.transitModes,
+        transitPreference: params.transitPreference,
+        parentTool: params.parentTool,
+      });
+      for (let row = 0; row < originBatch.length; row++) {
+        if (result.distances[row])
+          distances[originStart + row].splice(destinationStart, destinationBatch.length, ...result.distances[row]);
+        if (result.durations[row])
+          durations[originStart + row].splice(destinationStart, destinationBatch.length, ...result.durations[row]);
+      }
     }
   }
   return {
@@ -498,4 +539,61 @@ export async function computeBoundedTransitMatrix(
     origin_addresses: params.origins,
     destination_addresses: params.destinations,
   };
+}
+
+interface TransitMatrixEdge {
+  origin: string;
+  destination: string;
+}
+
+function buildFixedStopMatrixEdges(origin: string, stops: string[], final?: string): TransitMatrixEdge[] {
+  const edges = new Map<string, TransitMatrixEdge>();
+  const add = (from: string, to: string) => {
+    if (from === to) return;
+    edges.set(`${from}\u0000${to}`, { origin: from, destination: to });
+  };
+  for (const stop of stops) add(origin, stop);
+  for (const from of stops) for (const to of stops) add(from, to);
+  if (final) for (const stop of stops) add(stop, final);
+  return [...edges.values()];
+}
+
+export async function computeTargetedTransitMatrix(
+  routesService: RoutesService,
+  edges: TransitMatrixEdge[],
+  params: Omit<TransitMatrixParams, "origins" | "destinations">,
+  maxElements: number
+): Promise<Map<string, { value: number; text: string } | null>> {
+  const uniqueEdges = new Map(edges.map((edge) => [`${edge.origin}\u0000${edge.destination}`, edge]));
+  if (uniqueEdges.size > maxElements)
+    throw new Error(
+      `Transit planner matrix projects ${uniqueEdges.size} elements, exceeding the ${maxElements}-element ${maxElements <= 100 ? "conservative" : "thorough"} planner guard.`
+    );
+
+  const byOrigin = new Map<string, string[]>();
+  for (const edge of uniqueEdges.values()) {
+    const destinations = byOrigin.get(edge.origin) || [];
+    destinations.push(edge.destination);
+    byOrigin.set(edge.origin, destinations);
+  }
+
+  const durations = new Map<string, { value: number; text: string } | null>();
+  for (const [origin, destinations] of byOrigin) {
+    for (let start = 0; start < destinations.length; start += 100) {
+      const batch = destinations.slice(start, start + 100);
+      const matrix = await routesService.computeRouteMatrix({
+        origins: [origin],
+        destinations: batch,
+        mode: "transit",
+        departureTime: params.departureTime,
+        transitModes: params.transitModes,
+        transitPreference: params.transitPreference,
+        parentTool: params.parentTool,
+      });
+      for (let index = 0; index < batch.length; index++) {
+        durations.set(`${origin}\u0000${batch[index]}`, matrix.durations[0]?.[index] || null);
+      }
+    }
+  }
+  return durations;
 }

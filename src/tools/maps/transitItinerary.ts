@@ -7,17 +7,19 @@ import { GroundingLiteService } from "../../services/GroundingLiteService.js";
 
 const NAME = "maps_transit_itinerary";
 const DESCRIPTION =
-  "Route an explicitly ordered transit path such as A → station B → destination C. Google transit does not support intermediate waypoints, so this chains time-aware legs and propagates each arrival time. Cost: T1 | Fan-out: M.";
+  "Route an explicitly ordered transit path such as A → station B → destination C. Google transit does not support intermediate waypoints, so this chains time-aware legs and propagates each arrival time. The conservative planner allows up to 8 intermediate stops; use planner_mode=thorough for up to 16. Cost: T1 | Fan-out: M.";
 const SCHEMA = {
   locations: z
     .array(locationInputSchema)
     .min(2)
+    .max(18)
     .describe("Ordered query, Place ID, coordinates, or Maps URL locations"),
   departure_time: z.string().optional().describe("ISO departure time; defaults to now"),
   dwell_minutes: z.array(z.number().int().min(0)).optional().describe("Dwell after each non-final location"),
   detail_level: z.enum(["summary", "steps", "geometry", "full"]).default("steps"),
   transit_modes: z.array(z.enum(["bus", "subway", "train", "light_rail", "rail"])).optional(),
   transit_preference: z.enum(["less_walking", "fewer_transfers"]).optional(),
+  planner_mode: z.enum(["conservative", "thorough"]).default("conservative"),
 };
 export type TransitItineraryParams = z.infer<z.ZodObject<typeof SCHEMA>>;
 
@@ -26,7 +28,8 @@ async function ACTION(params: TransitItineraryParams): Promise<{ content: any[];
     const locations = await locationInputsToStrings(
       params.locations,
       params.locations.some((location) => location.kind === "maps_url")
-        ? (urls) => new GroundingLiteService(getCurrentApiKey()).resolveMapsUrlsToPlaceIds(urls)
+        ? (urls) =>
+            new GroundingLiteService(getCurrentApiKey()).resolveMapsUrlsToPlaceIds(urls, "maps_transit_itinerary")
         : undefined
     );
     const service = new TransitItineraryService(new RoutesService(getCurrentApiKey()));
@@ -37,6 +40,8 @@ async function ACTION(params: TransitItineraryParams): Promise<{ content: any[];
       detailLevel: params.detail_level,
       transitModes: params.transit_modes,
       transitPreference: params.transit_preference,
+      plannerMode: params.planner_mode,
+      parentTool: "maps_transit_itinerary",
     });
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   } catch (error: any) {

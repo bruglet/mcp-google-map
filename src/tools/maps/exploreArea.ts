@@ -4,7 +4,7 @@ import { getCurrentApiKey } from "../../utils/requestContext.js";
 
 const NAME = "maps_explore_area";
 const DESCRIPTION =
-  "Explore nearby categories in one call. Candidate search is cheap and detail enrichment is opt-in; enrich_top_n defaults to 0. Use for a neighborhood overview, not generic reviews/photos. Cost: T1-T4 | Fan-out: M.";
+  "Explore nearby categories in one call. Candidate search is bounded per category and detail enrichment is opt-in; enrich_top_n defaults to 0 and has no effect without explicit include groups. Use planner_mode=thorough for a broader bounded search. Use for a neighborhood overview, not generic reviews/photos. Cost: T1-T4 | Fan-out: M.";
 
 const SCHEMA = {
   location: z.string().describe("Address or landmark to explore around"),
@@ -38,6 +38,7 @@ const SCHEMA = {
     )
     .optional()
     .describe("Optional detail groups for enriched candidates"),
+  planner_mode: z.enum(["conservative", "thorough"]).default("conservative"),
 };
 
 export type ExploreAreaParams = z.infer<z.ZodObject<typeof SCHEMA>>;

@@ -38,6 +38,7 @@ export class TransitDiscoveryService {
         origins: [params.origin],
         destinations,
         departureTime: params.departureTime,
+        parentTool: "maps_find_places_by_transit",
       },
       plannerLimits(params.plannerMode).matrixElements
     );
@@ -54,6 +55,8 @@ export class TransitDiscoveryService {
         locations: [params.origin, locationString(candidate)],
         departureTime: params.departureTime,
         objective: params.objective,
+        plannerMode: params.plannerMode,
+        parentTool: "maps_find_places_by_transit",
       });
     }
     finalists.sort(
@@ -84,11 +87,26 @@ export class TransitDiscoveryService {
     if (!params.errands.length) throw new Error("At least one errand is required.");
     const mode = params.plannerMode || "conservative";
     const limits = plannerLimits(mode);
+    const discoveryQueries = new Set(
+      params.errands.filter((errand) => !errand.location && errand.query).map((errand) => errand.query as string)
+    );
+    if (discoveryQueries.size > limits.groundingSearches)
+      throw new Error(
+        `Errand planning projects ${discoveryQueries.size} Grounding Lite searches; the ${mode} planner limit is ${limits.groundingSearches}.`
+      );
+    const discoveryCache = new Map<string, Promise<TransitPlaceCandidate[]>>();
+    const discoverOnce = (query: string) => {
+      const cached = discoveryCache.get(query);
+      if (cached) return cached;
+      const request = this.discover(query, mode, "maps_optimize_transit_errands");
+      discoveryCache.set(query, request);
+      return request;
+    };
     const groups: TransitPlaceCandidate[][] = [];
     for (const errand of params.errands) {
       if (errand.location) groups.push([{ name: errand.location, address: errand.location }]);
       else if (errand.query)
-        groups.push((await this.discover(errand.query, mode)).slice(0, Math.min(4, limits.candidatesPerGroup)));
+        groups.push((await discoverOnce(errand.query)).slice(0, Math.min(4, limits.candidatesPerGroup)));
       else throw new Error("Each errand needs either query or location.");
     }
     if (groups.some((group) => !group.length)) throw new Error("At least one errand has no candidate locations.");
@@ -104,7 +122,8 @@ export class TransitDiscoveryService {
     const durations = await computeTargetedTransitDurations(
       new RoutesService(this.apiKey),
       matrixEdges,
-      params.departureTime
+      params.departureTime,
+      "maps_optimize_transit_errands"
     );
     const coarse = beamErrandOrders(groups, params.origin, finalDestination, durations, mode).slice(
       0,
@@ -128,6 +147,8 @@ export class TransitDiscoveryService {
           departureTime: params.departureTime,
           objective: params.objective,
           dwellMinutes: candidate.order.map((choice) => params.errands[choice.groupIndex].dwell_minutes || 0),
+          plannerMode: params.plannerMode,
+          parentTool: "maps_optimize_transit_errands",
         }),
       });
     }
@@ -149,9 +170,13 @@ export class TransitDiscoveryService {
     };
   }
 
-  private async discover(query: string, mode: PlannerMode = "conservative"): Promise<TransitPlaceCandidate[]> {
+  private async discover(
+    query: string,
+    mode: PlannerMode = "conservative",
+    parentTool = "maps_find_places_by_transit"
+  ): Promise<TransitPlaceCandidate[]> {
     try {
-      const grounded = await new GroundingLiteService(this.apiKey).searchPlaces(query);
+      const grounded = await new GroundingLiteService(this.apiKey).searchPlaces(query, parentTool);
       const parsed = extractGroundedPlaces(grounded);
       if (parsed.length) return parsed;
     } catch {
@@ -160,6 +185,7 @@ export class TransitDiscoveryService {
     const places = await new NewPlacesService(this.apiKey).searchText({
       textQuery: query,
       maxResultCount: plannerLimits(mode).candidatesPerGroup,
+      parentTool,
     });
     return places.map((place: any) => ({
       name: place.name,
@@ -254,7 +280,8 @@ function buildErrandMatrixEdges(
 async function computeTargetedTransitDurations(
   routesService: RoutesService,
   edges: MatrixEdge[],
-  departureTime?: Date
+  departureTime?: Date,
+  parentTool = "maps_distance_matrix"
 ): Promise<Map<string, number>> {
   const durations = new Map<string, number>();
   const byOrigin = new Map<string, Set<string>>();
@@ -272,6 +299,7 @@ async function computeTargetedTransitDurations(
         destinations: batch,
         mode: "transit",
         departureTime,
+        parentTool,
       });
       for (let index = 0; index < batch.length; index++) {
         const seconds = matrix.durations[0]?.[index]?.value;

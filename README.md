@@ -54,7 +54,7 @@ Optional Grounding Lite use also requires `GOOGLE_MAPS_GROUNDING_TERMS_ACK=true`
 
 Places defaults to identity/location fields and makes one combined Places New request for details. Contact, hours, ratings, price, reviews, accessibility, amenities, parking, and AI-summary groups are opt-in semantic groups; raw field masks are not accepted. Routes defaults to summary detail, no traffic awareness, no alternatives, and no waypoint ordering. Route matrices are guarded and accounted for as `origins × destinations`, including unavailable elements.
 
-Composite planners expose only `planner_mode=conservative|thorough`. The mounted ledger stores UTC monthly counters and warning thresholds, never Maps response content. Full field/SKU notes and official links are in [docs/COST_POLICY.md](./docs/COST_POLICY.md).
+Composite planners expose only `planner_mode=conservative|thorough`. Multi-stop route planning passes known locations directly and leaves waypoint ordering off unless explicitly requested. The mounted ledger stores UTC monthly counters and warning thresholds, never Maps response content. Full field/SKU notes and official links are in [docs/COST_POLICY.md](./docs/COST_POLICY.md).
 
 ## Rootless production deployment
 

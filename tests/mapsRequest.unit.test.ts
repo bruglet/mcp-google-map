@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { PlacesClient } from "@googlemaps/places";
 import { NewPlacesService } from "../src/services/NewPlacesService.js";
+import { PlacesSearcher } from "../src/services/PlacesSearcher.js";
 import { RoutesService, buildRoutesFieldMask } from "../src/services/RoutesService.js";
 
 test("Place Details makes one minimal Places New request by default", async () => {
@@ -72,6 +73,92 @@ test("basic driving omits traffic and waypoint optimization", async () => {
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("waypoint optimization is opt-in and accounted as Routes Pro", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalError = console.error;
+  let requestBody: Record<string, unknown> | undefined;
+  const logs: string[] = [];
+  try {
+    globalThis.fetch = async (_input, init) => {
+      requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(
+        JSON.stringify({
+          routes: [
+            {
+              distanceMeters: 100,
+              duration: "60s",
+              description: "test",
+              optimizedIntermediateWaypointIndex: [0],
+            },
+          ],
+        }),
+        { status: 200 }
+      );
+    };
+    console.error = (...args: unknown[]) => logs.push(args.join(" "));
+    await new RoutesService("test-key").computeRoutes({
+      origin: "A",
+      destination: "B",
+      mode: "driving",
+      intermediates: ["C"],
+      optimizeWaypointOrder: true,
+    });
+    assert.equal(requestBody?.optimizeWaypointOrder, true);
+    assert.match(logs.join("\n"), /"tier":"T2"/);
+    assert.match(logs.join("\n"), /Routes: Compute Routes Pro/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.error = originalError;
+  }
+});
+
+test("direct matrices stop at the local 100-element guard", async () => {
+  let outboundCalls = 0;
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => {
+      outboundCalls++;
+      return new Response("[]", { status: 200 });
+    };
+    await assert.rejects(
+      () =>
+        new RoutesService("test-key").computeRouteMatrix({
+          origins: ["A", "B"],
+          destinations: Array.from({ length: 51 }, (_, index) => `D${index}`),
+          mode: "driving",
+        }),
+      /102 elements.*100/
+    );
+    assert.equal(outboundCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("multi-stop planning passes addresses directly and preserves order by default", async () => {
+  const searcher = new PlacesSearcher("test-key") as any;
+  searcher.routesService = {
+    computeRoutes: async (params: Record<string, unknown>) => {
+      assert.equal(params.optimizeWaypointOrder, false);
+      return {
+        routes: [
+          {
+            legs: [
+              { distanceMeters: 100, duration: "60s" },
+              { distanceMeters: 200, duration: "120s" },
+            ],
+          },
+        ],
+      };
+    },
+  };
+  searcher.geocode = async () => {
+    throw new Error("maps_plan_route must not geocode stops");
+  };
+  const result = await searcher.planRoute({ stops: ["A", "B", "C"] });
+  assert.deepEqual(result.data.stops, ["A (A)", "B (B)", "C (C)"]);
 });
 
 test("transit intermediates are rejected before an outbound request", async () => {

@@ -64,7 +64,7 @@ export class GoogleMapsTools {
     }
   }
 
-  private async geocodeAddress(address: string): Promise<GeocodeResult> {
+  private async geocodeAddress(address: string, parentTool = "maps_geocode"): Promise<GeocodeResult> {
     try {
       const response = await withAccounting(
         {
@@ -72,7 +72,7 @@ export class GoogleMapsTools {
           operation: "geocode",
           tier: "T1",
           units: 1,
-          parentTool: "maps_geocode",
+          parentTool,
           reason: "address to coordinate resolution",
           fanout: "S",
         },
@@ -114,20 +114,23 @@ export class GoogleMapsTools {
     return { lat: coords[0], lng: coords[1] };
   }
 
-  async getLocation(center: { value: string; isCoordinates: boolean }): Promise<GeocodeResult> {
+  async getLocation(center: { value: string; isCoordinates: boolean }, parentTool?: string): Promise<GeocodeResult> {
     if (center.isCoordinates) {
       return this.parseCoordinates(center.value);
     }
-    return this.geocodeAddress(center.value);
+    return this.geocodeAddress(center.value, parentTool || "maps_geocode");
   }
 
-  async geocode(address: string): Promise<{
+  async geocode(
+    address: string,
+    parentTool?: string
+  ): Promise<{
     location: { lat: number; lng: number };
     formatted_address: string;
     place_id: string;
   }> {
     try {
-      const result = await this.geocodeAddress(address);
+      const result = await this.geocodeAddress(address, parentTool || "maps_geocode");
       return {
         location: { lat: result.lat, lng: result.lng },
         formatted_address: result.formatted_address || "",
@@ -192,6 +195,7 @@ export class GoogleMapsTools {
     destination: string;
     mode?: string;
     maxResults?: number;
+    parentTool?: string;
   }): Promise<{ places: any[]; route: { distance: string; duration: string; polyline: string } }> {
     try {
       // Step 1: Get directions via Routes API to obtain the encoded polyline
@@ -201,6 +205,7 @@ export class GoogleMapsTools {
         destination: params.destination,
         mode: params.mode || "walking",
         detailLevel: "geometry",
+        parentTool: params.parentTool || "maps_search_along_route",
       });
 
       const polyline = directions.routes[0]?.polyline?.encodedPolyline;
@@ -219,7 +224,7 @@ export class GoogleMapsTools {
           operation: "searchAlongRoute",
           tier: "T2",
           units: 1,
-          parentTool: "maps_search_along_route",
+          parentTool: params.parentTool || "maps_search_along_route",
           reason: "minimal candidates along route geometry",
           fanout: "S",
         },

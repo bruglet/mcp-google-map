@@ -10,6 +10,7 @@ export interface PlaceSearchOptions {
   maxResultCount?: number;
   openNow?: boolean;
   minRating?: number;
+  parentTool?: string;
 }
 
 export class NewPlacesService {
@@ -46,7 +47,7 @@ export class NewPlacesService {
           operation: "searchNearby",
           tier: "T2",
           units: 1,
-          parentTool: "maps_search_nearby",
+          parentTool: params.parentTool || "maps_search_nearby",
           reason: "minimal candidate discovery",
           fanout: "S",
         },
@@ -69,6 +70,7 @@ export class NewPlacesService {
     minRating?: number;
     includedType?: string;
     maxResultCount?: number;
+    parentTool?: string;
   }): Promise<any[]> {
     try {
       const request: any = {
@@ -95,7 +97,7 @@ export class NewPlacesService {
           operation: "searchText",
           tier: "T2",
           units: 1,
-          parentTool: "maps_search_places",
+          parentTool: params.parentTool || "maps_search_places",
           reason: "minimal candidate discovery",
           fanout: "S",
         },
@@ -111,7 +113,7 @@ export class NewPlacesService {
     }
   }
 
-  async getPlaceDetails(placeId: string, groups: PlaceFieldGroup[] = []): Promise<any> {
+  async getPlaceDetails(placeId: string, groups: PlaceFieldGroup[] = [], parentTool?: string): Promise<any> {
     try {
       const requestedGroups = [...new Set([...DEFAULT_PLACE_GROUPS, ...groups])];
       const fieldMask = buildPlaceFieldMask(requestedGroups);
@@ -121,7 +123,7 @@ export class NewPlacesService {
           operation: "getPlaceDetails",
           tier: fieldMask.tier,
           units: 1,
-          parentTool: "maps_place_details",
+          parentTool: parentTool || "maps_place_details",
           reason: requestedGroups.length > 2 ? "explicit enrichment" : "basic place identity",
           fanout: "S",
         },

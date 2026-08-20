@@ -4,7 +4,7 @@ import { getCurrentApiKey } from "../../utils/requestContext.js";
 
 const NAME = "maps_batch_geocode";
 const DESCRIPTION =
-  "Geocode multiple addresses in one call — up to 50 addresses, returns coordinates for each. Use when the user provides a list of addresses and needs all their coordinates, e.g. 'geocode these 10 offices' or 'get coordinates for all these restaurants'. For more than 50, use the CLI batch-geocode command instead.";
+  "Geocode up to 50 addresses in one bounded operation. Each address still consumes one Geocoding API request; this tool preserves per-address failures and accounts the fan-out. Use when the user provides a list of addresses and needs all their coordinates. For more than 50, use the CLI batch-geocode command instead.";
 
 const SCHEMA = {
   addresses: z.array(z.string()).min(1).max(50).describe("List of addresses or landmark names to geocode (max 50)"),
@@ -18,16 +18,19 @@ async function ACTION(params: any): Promise<{ content: any[]; isError?: boolean 
     const searcher = new PlacesSearcher(apiKey);
     const addresses: string[] = params.addresses;
 
-    const results = await Promise.all(
-      addresses.map(async (address: string) => {
+    const uniqueAddresses = [...new Set(addresses)];
+    const resolved = await Promise.all(
+      uniqueAddresses.map(async (address: string) => {
         try {
-          const result = await searcher.geocode(address);
+          const result = await searcher.geocode(address, "maps_batch_geocode");
           return { address, ...result };
         } catch (error: any) {
           return { address, success: false, error: error.message };
         }
       })
     );
+    const resultByAddress = new Map(resolved.map((result) => [result.address, result]));
+    const results = addresses.map((address) => resultByAddress.get(address)!);
 
     const succeeded = results.filter((r) => r.success).length;
     const failed = results.filter((r) => !r.success).length;

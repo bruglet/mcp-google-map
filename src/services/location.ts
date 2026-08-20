@@ -49,15 +49,16 @@ export async function locationInputsToStrings(
   const mapsUrls = inputs.filter(
     (input): input is Extract<LocationInput, { kind: "maps_url" }> => input.kind === "maps_url"
   );
+  const uniqueMapsUrls = [...new Set(mapsUrls.map((input) => input.value))];
   const resolved = mapsUrls.length
     ? await (resolveMapsUrls
-        ? resolveMapsUrls(mapsUrls.map((input) => input.value))
+        ? resolveMapsUrls(uniqueMapsUrls)
         : Promise.reject(new Error("Maps URL inputs require Grounding Lite resolution for route planning.")))
     : [];
-  let urlIndex = 0;
+  const resolvedByUrl = new Map(uniqueMapsUrls.map((url, index) => [url, resolved[index]]));
   return inputs.map((input) => {
     if (input.kind !== "maps_url") return locationInputToString(input);
-    const placeId = resolved[urlIndex++];
+    const placeId = resolvedByUrl.get(input.value);
     if (!placeId) throw new Error("GROUNDING_UNAVAILABLE: Maps URL did not resolve to a Place ID");
     return `place_id:${placeId}`;
   });
