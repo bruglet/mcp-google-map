@@ -194,7 +194,7 @@ export const PLANNER_LIMITS = {
     candidatesPerGroup: 10,
     groundingSearches: 10,
     matrixElements: 300,
-    exactRoutes: 8,
+    exactRoutes: 10,
     highTierEnrichments: 10,
     fixedStops: 16,
   },

@@ -17,7 +17,7 @@ const SCHEMA = {
     .string()
     .optional()
     .describe(
-      "Departure time in ISO 8601 format (e.g. 2026-03-21T09:00:00Z). Enables traffic-aware duration estimates."
+      "Departure time in ISO 8601 format (e.g. 2026-03-21T09:00:00Z). Controls time-dependent routing and transit schedules; it does not enable live driving traffic unless traffic is aware or optimal."
     ),
   avoid_tolls: z
     .boolean()

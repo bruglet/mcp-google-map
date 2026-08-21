@@ -6,7 +6,7 @@ import { GroundingLiteService } from "../../services/GroundingLiteService.js";
 
 const NAME = "maps_find_places_by_transit";
 const DESCRIPTION =
-  "Find semantic place candidates and rank them by transit time from an origin. Discovery is bounded and only finalists receive detailed routes. Cost: T1 | Fan-out: L.";
+  "Find semantic place candidates and rank them by transit time from an origin. Discovery is bounded and only finalists receive detailed routes. least_walking and fewest_transfers guide Google's transit preference automatically, but the duration-only shortlist means non-time objectives remain bounded heuristics. Cost: T1 | Fan-out: L.";
 const SCHEMA = {
   origin: locationInputSchema,
   query: z.string(),

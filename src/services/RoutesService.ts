@@ -194,7 +194,8 @@ export class RoutesService {
 
     const tier =
       Boolean(params.optimizeWaypointOrder) ||
-      (travelMode === "DRIVE" && Boolean(params.traffic && params.traffic !== "none"))
+      (travelMode === "DRIVE" && Boolean(params.traffic && params.traffic !== "none")) ||
+      (params.intermediates?.length ?? 0) > 10
         ? "T2"
         : "T1";
     const response = await withAccounting(

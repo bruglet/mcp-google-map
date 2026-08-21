@@ -6,7 +6,7 @@ import { GroundingLiteService } from "../../services/GroundingLiteService.js";
 
 const NAME = "maps_optimize_transit_errands";
 const DESCRIPTION =
-  "Choose branches and order for several transit errands. Uses bounded candidate discovery, targeted matrix approximation, local branch/order search, and chronological exact reranking. Cost: T1 | Fan-out: L.";
+  "Choose branches and order for several transit errands. Uses bounded candidate discovery, targeted matrix approximation, local branch/order search, and chronological exact reranking. least_walking and fewest_transfers guide Google's transit preference automatically; because coarse matrices expose duration rather than full walking/transfer detail, non-time objectives remain bounded heuristics. Cost: T1 | Fan-out: L.";
 const SCHEMA = {
   origin: locationInputSchema,
   errands: z

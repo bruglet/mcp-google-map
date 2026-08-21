@@ -7,7 +7,7 @@ import { GroundingLiteService } from "../../services/GroundingLiteService.js";
 
 const NAME = "maps_plan_transit";
 const DESCRIPTION =
-  "Find the best order for known transit stops using a bounded coarse matrix, local optimization, and chronological exact reranking. Cost: T1 | Fan-out: L; matrix elements are counted.";
+  "Find the best order for known transit stops using a bounded coarse matrix, local optimization, and chronological exact reranking. least_walking and fewest_transfers automatically guide Google's transit preference when transit_preference is omitted; because the coarse matrix exposes duration rather than full walking/transfer detail, non-time objectives remain bounded heuristics rather than guaranteed global optima. Cost: T1 | Fan-out: L; matrix elements are counted.";
 const SCHEMA = {
   origin: locationInputSchema.describe("Starting point"),
   stops: z.array(locationInputSchema).min(1).describe("Known stops whose order may change"),

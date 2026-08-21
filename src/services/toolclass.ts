@@ -551,7 +551,7 @@ export class GoogleMapsTools {
           api: "elevation",
           operation: "elevation",
           tier: "T2",
-          units: locations.length,
+          units: 1,
           parentTool: "maps_elevation",
           reason: "explicit elevation lookup",
           fanout: locations.length > 5 ? "M" : "S",

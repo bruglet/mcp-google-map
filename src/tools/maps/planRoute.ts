@@ -4,7 +4,7 @@ import { getCurrentApiKey } from "../../utils/requestContext.js";
 
 const NAME = "maps_plan_route";
 const DESCRIPTION =
-  "Plan a bounded multi-stop route in one call using the caller's addresses, coordinates, or Place IDs directly. Waypoint reordering is opt-in because it promotes the Routes request; the default preserves the supplied order and returns compact leg directions. planner_mode=conservative allows up to 8 intermediate stops and thorough up to 16. Use when the user says 'visit these 5 places efficiently', 'plan a route through A, B, C', or needs a multi-stop itinerary. Departure time provides schedule context; traffic-aware routing is not enabled implicitly. Transit uses the time-propagating itinerary planner.";
+  "Plan a bounded multi-stop route in one call using the caller's addresses, coordinates, or Place IDs directly. Waypoint reordering is opt-in because it promotes the Routes request; the default preserves the supplied order and returns compact leg directions. planner_mode=conservative allows up to 8 intermediate stops and thorough up to 16; 11 or more intermediates are also Routes Pro even without reordering. Use when the user says 'visit these 5 places efficiently', 'plan a route through A, B, C', or needs a multi-stop itinerary. Departure time provides schedule context; traffic-aware routing is not enabled implicitly. Transit uses the time-propagating itinerary planner.";
 
 const SCHEMA = {
   stops: z
