@@ -6,9 +6,11 @@ import { GroundingLiteService } from "../../services/GroundingLiteService.js";
 
 const NAME = "maps_optimize_transit_errands";
 const DESCRIPTION =
-  "Choose both the branch and visit order for several transit errands, then return the best chronological itinerary and alternatives. Use when errands may be queries such as 'an IKEA' or fixed locations; use maps_plan_transit when every stop is already known and only order may change. Candidate discovery combines bounded semantic and literal search, and exact rankings use complete arrival times including dwell; valid itineraries report dwellSeconds. Non-time objectives still use a duration-based shortlist, so they are heuristics rather than guaranteed global optima. Invalid exact finalists are returned in invalidFinalists and never ranked; selected is null if every exact route is invalid. Cost: T1 | Fan-out: L.";
+  "Choose both the branch and visit order for several transit errands, then return the best chronological itinerary and alternatives. Use when errands may be queries such as 'an IKEA' or fixed locations; use maps_plan_transit when every stop is already known and only order may change. Query discovery combines bounded semantic and literal search biased near the trip origin, and exact rankings use complete arrival times including dwell; walking and transit breakdowns are estimates, and waiting is omitted with a warning when it cannot be reconciled safely. Non-time objectives still use a duration-based shortlist, so they are heuristics rather than guaranteed global optima. Invalid exact finalists are returned in invalidFinalists and never ranked; selected is null if every exact route is invalid. Cost: T1 | Fan-out: L.";
 const SCHEMA = {
-  origin: locationInputSchema.describe("Trip starting point as a query, Place ID, coordinates, or Maps URL."),
+  origin: locationInputSchema.describe(
+    "Trip starting point as a query, Place ID, coordinates, or Maps URL; query-based errands are geographically biased around this origin."
+  ),
   errands: z
     .array(
       z.object({
@@ -86,6 +88,10 @@ async function ACTION(params: OptimizeTransitErrandsParams): Promise<{ content: 
     const result = await new TransitDiscoveryService(getCurrentApiKey()).optimizeErrands({
       ...params,
       origin,
+      originInput:
+        params.origin.kind === "maps_url"
+          ? { kind: "place_id", value: origin.slice("place_id:".length) }
+          : params.origin,
       errands,
       departureTime: params.departure_time ? new Date(params.departure_time) : undefined,
       finalDestination,

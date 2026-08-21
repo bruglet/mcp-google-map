@@ -143,6 +143,7 @@ export class TransitDiscoveryService {
 
   async optimizeErrands(params: {
     origin: string;
+    originInput?: LocationInput;
     errands: Array<{ query?: string; location?: string; dwell_minutes?: number }>;
     finalDestination?: string;
     returnToOrigin?: boolean;
@@ -160,11 +161,19 @@ export class TransitDiscoveryService {
       throw new Error(
         `Errand planning projects ${discoveryQueries.size} Grounding Lite searches; the ${mode} planner limit is ${limits.groundingSearches}.`
       );
+    const placesService = new NewPlacesService(this.apiKey);
+    const discoveryBias = discoveryQueries.size
+      ? await this.resolveDiscoveryBias(
+          params.originInput || parseLocationInput(params.origin),
+          placesService,
+          "maps_optimize_transit_errands"
+        )
+      : undefined;
     const discoveryCache = new Map<string, Promise<TransitPlaceCandidate[]>>();
     const discoverOnce = (query: string) => {
       const cached = discoveryCache.get(query);
       if (cached) return cached;
-      const request = this.discover(query, mode, "maps_optimize_transit_errands");
+      const request = this.discover(query, mode, "maps_optimize_transit_errands", discoveryBias, placesService);
       discoveryCache.set(query, request);
       return request;
     };

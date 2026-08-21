@@ -202,6 +202,7 @@ test("errand planning trims query candidates before matrix fan-out", async () =>
   try {
     const result = await service.optimizeErrands({
       origin: "Home",
+      originInput: { kind: "coordinates", latitude: 34, longitude: -118 },
       errands: [{ query: "IKEA" }, { query: "Walmart" }, { query: "Target" }],
       plannerMode: "conservative",
     });
@@ -455,6 +456,183 @@ test("transit place discovery combines origin-biased sources for the USC Village
   }
 });
 
+test("errand discovery anchors every query group around the trip origin", async () => {
+  const originalAck = process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK;
+  const originalGeocode = GoogleMapsTools.prototype.geocode;
+  const originalGroundingSearch = GroundingLiteService.prototype.searchPlaces;
+  const originalPlacesSearch = NewPlacesService.prototype.searchText;
+  const originalMatrix = RoutesService.prototype.computeRouteMatrix;
+  const originalRoutes = RoutesService.prototype.computeRoutes;
+  const groundingBiases: unknown[] = [];
+  const placesBiases: unknown[] = [];
+  const matrixLocations = new Set<string>();
+  let geocodeCalls = 0;
+  process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK = "true";
+  GoogleMapsTools.prototype.geocode = async function () {
+    geocodeCalls++;
+    return { location: { lat: 34.023, lng: -118.286 }, formatted_address: "USC Village", place_id: "origin" };
+  };
+  GroundingLiteService.prototype.searchPlaces = async function (query, _parentTool, locationBias) {
+    groundingBiases.push(locationBias);
+    const slug = query.toLowerCase().startsWith("target") ? "target" : "pharmacy";
+    return {
+      structuredContent: {
+        places: [
+          {
+            place: `places/${slug}-baldwin-park`,
+            displayName: { text: `${slug} Baldwin Park` },
+            location: { latitude: 34.08, longitude: -117.96 },
+          },
+        ],
+      },
+    };
+  };
+  NewPlacesService.prototype.searchText = async function (params) {
+    placesBiases.push(params.locationBias);
+    const isTarget = params.textQuery.toLowerCase().startsWith("target");
+    const prefix = isTarget ? "target" : "cvs";
+    return [
+      {
+        name: isTarget ? "Target USC Village" : "CVS near USC",
+        place_id: `${prefix}-usc`,
+        formatted_address: "USC Village, Los Angeles, CA",
+        geometry: { location: { lat: 34.024, lng: -118.285 } },
+      },
+      ...Array.from({ length: 4 }, (_, index) => ({
+        name: `${prefix} branch ${index}`,
+        place_id: `${prefix}-far-${index}`,
+        formatted_address: `Far branch ${index}, Los Angeles, CA`,
+        geometry: { location: { lat: 34.1 + index * 0.01, lng: -118 + index * 0.01 } },
+      })),
+    ];
+  };
+  RoutesService.prototype.computeRouteMatrix = async function (params) {
+    params.origins.forEach((location) => matrixLocations.add(location));
+    params.destinations.forEach((location) => matrixLocations.add(location));
+    return {
+      distances: params.origins.map(() => params.destinations.map(() => ({ value: 1, text: "1 m" }))),
+      durations: params.origins.map(() =>
+        params.destinations.map((destination) => ({
+          value: destination.includes("-usc") ? 300 : 1800,
+          text: "",
+        }))
+      ),
+      origin_addresses: params.origins,
+      destination_addresses: params.destinations,
+    };
+  };
+  RoutesService.prototype.computeRoutes = async function (params) {
+    const seconds = params.destination.includes("-usc") ? 300 : 1800;
+    return {
+      routes: [{ duration: `${seconds}s`, legs: [{ duration: `${seconds}s`, steps: [] }] }],
+      total_duration: { value: seconds, text: "" },
+    };
+  };
+  try {
+    const result = await new TransitDiscoveryService("test-key").optimizeErrands({
+      origin: "USC Village, Los Angeles, CA",
+      originInput: { kind: "query", value: "USC Village, Los Angeles, CA" },
+      errands: [{ query: "Target stores" }, { query: "CVS or Walgreens" }],
+      returnToOrigin: true,
+      plannerMode: "thorough",
+    });
+
+    const expectedBias = { lat: 34.023, lng: -118.286, radius: 25_000 };
+    assert.equal(geocodeCalls, 1);
+    assert.deepEqual(placesBiases, [expectedBias, expectedBias]);
+    assert.deepEqual(
+      groundingBiases,
+      Array.from({ length: 2 }, () => ({
+        circle: { center: { latitude: 34.023, longitude: -118.286 }, radius: 25_000 },
+      }))
+    );
+    assert.ok(matrixLocations.has("place_id:target-usc"));
+    assert.ok(matrixLocations.has("place_id:cvs-usc"));
+    assert.deepEqual(result.selected.order.map((choice: { location: string }) => choice.location).sort(), [
+      "place_id:cvs-usc",
+      "place_id:target-usc",
+    ]);
+    assert.deepEqual(result.guardReductions.initialCandidateCounts, [4, 4]);
+  } finally {
+    if (originalAck === undefined) delete process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK;
+    else process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK = originalAck;
+    GoogleMapsTools.prototype.geocode = originalGeocode;
+    GroundingLiteService.prototype.searchPlaces = originalGroundingSearch;
+    NewPlacesService.prototype.searchText = originalPlacesSearch;
+    RoutesService.prototype.computeRouteMatrix = originalMatrix;
+    RoutesService.prototype.computeRoutes = originalRoutes;
+  }
+});
+
+test("errand discovery uses a coordinate origin in another metro without changing fixed locations", async () => {
+  const originalAck = process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK;
+  const originalGeocode = GoogleMapsTools.prototype.geocode;
+  const originalGroundingSearch = GroundingLiteService.prototype.searchPlaces;
+  const originalPlacesSearch = NewPlacesService.prototype.searchText;
+  const originalMatrix = RoutesService.prototype.computeRouteMatrix;
+  const originalRoutes = RoutesService.prototype.computeRoutes;
+  const groundingBiases: unknown[] = [];
+  const placesBiases: unknown[] = [];
+  const matrixLocations = new Set<string>();
+  process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK = "true";
+  GoogleMapsTools.prototype.geocode = async function () {
+    throw new Error("coordinate origins must not be geocoded");
+  };
+  GroundingLiteService.prototype.searchPlaces = async function (_query, _parentTool, locationBias) {
+    groundingBiases.push(locationBias);
+    return {};
+  };
+  NewPlacesService.prototype.searchText = async function (params) {
+    placesBiases.push(params.locationBias);
+    return [
+      {
+        name: "Target Chicago",
+        place_id: "target-chicago",
+        formatted_address: "Chicago, IL",
+        geometry: { location: { lat: 41.881, lng: -87.629 } },
+      },
+    ];
+  };
+  RoutesService.prototype.computeRouteMatrix = async function (params) {
+    params.origins.forEach((location) => matrixLocations.add(location));
+    params.destinations.forEach((location) => matrixLocations.add(location));
+    return {
+      distances: params.origins.map(() => params.destinations.map(() => ({ value: 1, text: "1 m" }))),
+      durations: params.origins.map(() => params.destinations.map(() => ({ value: 600, text: "10 mins" }))),
+      origin_addresses: params.origins,
+      destination_addresses: params.destinations,
+    };
+  };
+  RoutesService.prototype.computeRoutes = async function () {
+    return {
+      routes: [{ duration: "600s", legs: [{ duration: "600s", steps: [] }] }],
+      total_duration: { value: 600, text: "10 mins" },
+    };
+  };
+  try {
+    const result = await new TransitDiscoveryService("test-key").optimizeErrands({
+      origin: "41.88,-87.63",
+      originInput: { kind: "coordinates", latitude: 41.88, longitude: -87.63 },
+      errands: [{ query: "Target" }, { location: "Walgreens, Chicago, IL" }],
+      plannerMode: "conservative",
+    });
+
+    assert.deepEqual(placesBiases, [{ lat: 41.88, lng: -87.63, radius: 25_000 }]);
+    assert.deepEqual(groundingBiases, [{ circle: { center: { latitude: 41.88, longitude: -87.63 }, radius: 25_000 } }]);
+    assert.ok(matrixLocations.has("place_id:target-chicago"));
+    assert.ok(matrixLocations.has("Walgreens, Chicago, IL"));
+    assert.deepEqual(result.guardReductions.initialCandidateCounts, [1, 1]);
+  } finally {
+    if (originalAck === undefined) delete process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK;
+    else process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK = originalAck;
+    GoogleMapsTools.prototype.geocode = originalGeocode;
+    GroundingLiteService.prototype.searchPlaces = originalGroundingSearch;
+    NewPlacesService.prototype.searchText = originalPlacesSearch;
+    RoutesService.prototype.computeRouteMatrix = originalMatrix;
+    RoutesService.prototype.computeRoutes = originalRoutes;
+  }
+});
+
 test("Grounding-only transit finalists are hydrated without enriching rejected candidates", async () => {
   const originalAck = process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK;
   const originalGeocode = GoogleMapsTools.prototype.geocode;
@@ -576,7 +754,7 @@ test("place discovery reports invalid exact finalists without ranking them", asy
                   transitDetails: {
                     stopDetails: {
                       departureTime: "2030-01-01T10:05:00.000Z",
-                      arrivalTime: "2030-01-01T10:11:00.000Z",
+                      arrivalTime: "2030-01-01T10:04:00.000Z",
                     },
                   },
                 },
@@ -627,7 +805,7 @@ test("fixed-stop and errand optimizers exclude invalid exact finalists", async (
                 transitDetails: {
                   stopDetails: {
                     departureTime: "2030-01-01T10:05:00.000Z",
-                    arrivalTime: "2030-01-01T10:11:00.000Z",
+                    arrivalTime: "2030-01-01T10:04:00.000Z",
                   },
                 },
               },
@@ -678,6 +856,7 @@ test("fixed-stop and errand optimizers exclude invalid exact finalists", async (
       async () => [{ name: "IKEA Burbank", address: "IKEA Burbank" }];
     const errandResult = await service.optimizeErrands({
       origin: "Home",
+      originInput: { kind: "coordinates", latitude: 34, longitude: -118 },
       errands: [{ query: "IKEA" }],
       departureTime: initial,
       plannerMode: "conservative",
@@ -759,7 +938,123 @@ test("raw route chronology includes initial waiting and final walking", async ()
   assert.ok(Date.parse(leg.firstTransitDepartureTime!) <= Date.parse(leg.lastTransitArrivalTime!));
   assert.ok(Date.parse(leg.lastTransitArrivalTime!) < Date.parse(leg.arrivalTime));
   assert.equal(leg.walkingSeconds! + leg.transitSeconds! + leg.waitingSeconds!, leg.durationSeconds);
-  assert.match(itinerary.warnings.join(" "), /validated raw duration was used/);
+  assert.match(itinerary.warnings.join(" "), /raw estimate was retained/);
+});
+
+test("route, leg, and schedule estimates remain usable without forcing exact equality", async () => {
+  const initial = new Date("2030-01-01T10:00:00.000Z");
+  const fakeRoutes = {
+    computeRoutes: async () => ({
+      routes: [
+        {
+          duration: "390s",
+          legs: [
+            {
+              duration: "383s",
+              steps: [
+                { travelMode: "WALK", staticDuration: "30s" },
+                {
+                  travelMode: "TRANSIT",
+                  transitDetails: {
+                    stopDetails: {
+                      departureTime: "2030-01-01T10:01:00.000Z",
+                      arrivalTime: "2030-01-01T10:06:30.000Z",
+                    },
+                  },
+                },
+                { travelMode: "WALK", staticDuration: "30s" },
+              ],
+            },
+          ],
+        },
+      ],
+      total_duration: { value: 390, text: "6 mins" },
+    }),
+  } as unknown as RoutesService;
+
+  const itinerary = await new TransitItineraryService(fakeRoutes).routeFixedPath({
+    locations: ["Times Square", "Target, 34th Street"],
+    departureTime: initial,
+  });
+  const leg = itinerary.legs[0];
+  assert.equal(leg.arrivalTime, "2030-01-01T10:07:00.000Z");
+  assert.equal(leg.durationSeconds, 420);
+  assert.equal(itinerary.totalElapsedSeconds, 420);
+  assert.equal(itinerary.travelSeconds, 420);
+  assert.ok(Date.parse(leg.lastTransitArrivalTime!) < Date.parse(leg.arrivalTime));
+  assert.equal(leg.walkingSeconds, 60);
+  assert.equal(leg.transitSeconds, 330);
+  assert.equal(leg.waitingSeconds, 30);
+  assert.match(itinerary.warnings.join(" "), /route and leg duration estimates differ/);
+  assert.match(itinerary.warnings.join(" "), /later schedule boundary was used/);
+});
+
+test("incomplete or contradictory category estimates do not invalidate door-to-door timing", async () => {
+  const initial = new Date("2030-01-01T10:00:00.000Z");
+  const responses = [
+    {
+      routes: [
+        {
+          duration: "600s",
+          legs: [
+            {
+              duration: "600s",
+              steps: [
+                {
+                  travelMode: "TRANSIT",
+                  transitDetails: { stopDetails: { departureTime: "2030-01-01T10:02:00.000Z" } },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      total_duration: { value: 600, text: "10 mins" },
+    },
+    {
+      routes: [
+        {
+          duration: "600s",
+          legs: [
+            {
+              duration: "600s",
+              steps: [
+                { travelMode: "WALK", staticDuration: "400s" },
+                {
+                  travelMode: "TRANSIT",
+                  transitDetails: {
+                    stopDetails: {
+                      departureTime: "2030-01-01T10:03:00.000Z",
+                      arrivalTime: "2030-01-01T10:08:00.000Z",
+                    },
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      total_duration: { value: 600, text: "10 mins" },
+    },
+  ];
+  const fakeRoutes = {
+    computeRoutes: async () => responses.shift()!,
+  } as unknown as RoutesService;
+  const service = new TransitItineraryService(fakeRoutes);
+
+  const incomplete = await service.routeFixedPath({ locations: ["A", "B"], departureTime: initial });
+  assert.equal(incomplete.totalElapsedSeconds, 600);
+  assert.equal(incomplete.transitSeconds, undefined);
+  assert.equal(incomplete.waitingSeconds, undefined);
+  assert.equal(incomplete.legs[0].firstTransitDepartureTime, undefined);
+  assert.match(incomplete.warnings.join(" "), /omitted a transit timestamp/);
+
+  const contradictory = await service.routeFixedPath({ locations: ["C", "D"], departureTime: initial });
+  assert.equal(contradictory.totalElapsedSeconds, 600);
+  assert.equal(contradictory.walkingSeconds, 400);
+  assert.equal(contradictory.transitSeconds, 300);
+  assert.equal(contradictory.waitingSeconds, undefined);
+  assert.match(contradictory.warnings.join(" "), /waiting was omitted/);
 });
 
 test("invalid transit chronology never produces an itinerary", async () => {
@@ -770,13 +1065,13 @@ test("invalid transit chronology never produces an itinerary", async () => {
   });
   const cases = [
     {
-      name: "route ends before a transit event",
+      name: "transit event begins before the requested departure",
       route: {
         duration: "600s",
         legs: [
           {
             duration: "600s",
-            steps: [transitStep("2030-01-01T10:05:00.000Z", "2030-01-01T10:11:00.000Z")],
+            steps: [transitStep("2030-01-01T09:59:00.000Z", "2030-01-01T10:05:00.000Z")],
           },
         ],
       },
@@ -794,18 +1089,18 @@ test("invalid transit chronology never produces an itinerary", async () => {
       },
     },
     {
-      name: "route and leg durations disagree",
-      route: { duration: "600s", legs: [{ duration: "602s", steps: [] }] },
-    },
-    {
-      name: "transit timestamps are missing",
-      route: { duration: "600s", legs: [{ duration: "600s", steps: [{ travelMode: "TRANSIT" }] }] },
-    },
-    {
-      name: "walking steps overrun the route",
+      name: "transit events are non-chronological",
       route: {
         duration: "600s",
-        legs: [{ duration: "600s", steps: [{ travelMode: "WALK", staticDuration: "601s" }] }],
+        legs: [
+          {
+            duration: "600s",
+            steps: [
+              transitStep("2030-01-01T10:01:00.000Z", "2030-01-01T10:05:00.000Z"),
+              transitStep("2030-01-01T10:04:00.000Z", "2030-01-01T10:08:00.000Z"),
+            ],
+          },
+        ],
       },
     },
   ];
