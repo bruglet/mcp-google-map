@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { RoutesService } from "../src/services/RoutesService.js";
+import { GroundingLiteService } from "../src/services/GroundingLiteService.js";
+import { GoogleMapsTools } from "../src/services/toolclass.js";
+import { NewPlacesService } from "../src/services/NewPlacesService.js";
 import {
   computeBoundedTransitMatrix,
   computeTargetedTransitMatrix,
@@ -19,7 +22,7 @@ test("ordered transit legs propagate arrival plus dwell into the next departure"
       const departure = params.departureTime || initial;
       departures.push(departure);
       detailLevels.push(params.detailLevel || "");
-      const arrival = new Date(departure.getTime() + 10 * 60 * 1000).toISOString();
+      const transitArrival = new Date(departure.getTime() + 8 * 60 * 1000).toISOString();
       return {
         routes: [
           {
@@ -30,7 +33,7 @@ test("ordered transit legs propagate arrival plus dwell into the next departure"
                     travelMode: "TRANSIT",
                     staticDuration: "600s",
                     transitDetails: {
-                      stopDetails: { departureTime: departure.toISOString(), arrivalTime: arrival },
+                      stopDetails: { departureTime: departure.toISOString(), arrivalTime: transitArrival },
                       transitLine: { shortName: "M1" },
                     },
                   },
@@ -55,6 +58,10 @@ test("ordered transit legs propagate arrival plus dwell into the next departure"
   assert.equal(departures[0].toISOString(), initial.toISOString());
   assert.equal(departures[1].toISOString(), "2030-01-01T10:15:00.000Z");
   assert.equal(itinerary.totalElapsedSeconds, 1500);
+  assert.equal(itinerary.travelSeconds, 1200);
+  assert.equal(itinerary.legs[0].departureTime, "2030-01-01T10:00:00.000Z");
+  assert.equal(itinerary.legs[0].arrivalTime, "2030-01-01T10:10:00.000Z");
+  assert.equal(itinerary.legs[0].lastTransitArrivalTime, "2030-01-01T10:08:00.000Z");
   assert.equal(itinerary.detailLevel, "summary");
   assert.deepEqual(detailLevels, ["summary", "summary"]);
   assert.equal(itinerary.legs.length, 2);
@@ -304,4 +311,242 @@ test("fixed-stop matrix requests include only edges that can occur in an order",
     6
   );
   assert.equal(durations.get("Home\u0000A")?.value, 60);
+});
+
+test("transit place discovery combines origin-biased sources for the USC Village Walmart case", async () => {
+  const originalAck = process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK;
+  const originalGeocode = GoogleMapsTools.prototype.geocode;
+  const originalGroundingSearch = GroundingLiteService.prototype.searchPlaces;
+  const originalPlacesSearch = NewPlacesService.prototype.searchText;
+  const originalMatrix = RoutesService.prototype.computeRouteMatrix;
+  const originalRoutes = RoutesService.prototype.computeRoutes;
+  const groundingBiases: unknown[] = [];
+  const placesBiases: unknown[] = [];
+  const matrixCalls: Array<{ origins: string[]; destinations: string[] }> = [];
+  const exactCalls: Array<{ destination: string }> = [];
+  process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK = "true";
+  GoogleMapsTools.prototype.geocode = async function () {
+    return { location: { lat: 34.023, lng: -118.286 }, formatted_address: "USC Village", place_id: "origin" };
+  };
+  GroundingLiteService.prototype.searchPlaces = async function (_query, _parentTool, locationBias) {
+    groundingBiases.push(locationBias);
+    return {
+      structuredContent: {
+        places: [
+          {
+            place: "places/far-san-gabriel",
+            location: { latitude: 34.13, longitude: -117.92 },
+            googleMapsLinks: { placeUri: "https://maps.google.com/?cid=far" },
+          },
+        ],
+      },
+    };
+  };
+  NewPlacesService.prototype.searchText = async function (params) {
+    placesBiases.push(params.locationBias);
+    return [
+      {
+        name: "Walmart Supercenter",
+        place_id: "south-gate",
+        formatted_address: "4651 Firestone Blvd, South Gate, CA 90280",
+        geometry: { location: { lat: 33.96, lng: -118.15 } },
+      },
+      {
+        name: "Walmart Supercenter",
+        place_id: "compton",
+        formatted_address: "2100 N Long Beach Blvd, Compton, CA 90221",
+        geometry: { location: { lat: 33.89, lng: -118.22 } },
+      },
+      {
+        name: "Walmart",
+        place_id: "torrance",
+        formatted_address: "19503 Normandie Ave, Torrance, CA 90501",
+        geometry: { location: { lat: 33.83, lng: -118.29 } },
+      },
+    ];
+  };
+  RoutesService.prototype.computeRouteMatrix = async function (params) {
+    matrixCalls.push(params);
+    return {
+      distances: params.origins.map(() => params.destinations.map(() => ({ value: 1, text: "1 m" }))),
+      durations: params.origins.map(() =>
+        params.destinations.map((destination) => ({
+          value: destination.includes("south-gate")
+            ? 3180
+            : destination.includes("compton")
+              ? 3400
+              : destination.includes("torrance")
+                ? 3500
+                : 6000,
+          text: "",
+        }))
+      ),
+      origin_addresses: params.origins,
+      destination_addresses: params.destinations,
+    };
+  };
+  RoutesService.prototype.computeRoutes = async function (params) {
+    exactCalls.push({ destination: params.destination });
+    const seconds = params.destination.includes("south-gate")
+      ? 3000
+      : params.destination.includes("compton")
+        ? 3300
+        : 3901;
+    return { routes: [{ legs: [] }], total_duration: { value: seconds, text: "" } };
+  };
+  try {
+    const result = await new TransitDiscoveryService("test-key").findPlacesByTransit({
+      origin: "USC Village, Los Angeles, CA",
+      query: "Walmart stores near Los Angeles",
+      departureTime: new Date("2026-08-21T03:30:00.000Z"),
+      maxMinutes: 60,
+      objective: "fastest",
+      plannerMode: "thorough",
+    });
+
+    assert.deepEqual(placesBiases[0], { lat: 34.023, lng: -118.286, radius: 25_000 });
+    assert.deepEqual(groundingBiases[0], {
+      circle: { center: { latitude: 34.023, longitude: -118.286 }, radius: 25_000 },
+    });
+    assert.equal(matrixCalls.length, 1);
+    assert.equal(matrixCalls[0].destinations.length, 4);
+    assert.deepEqual(
+      result.candidates.map((candidate: any) => candidate.placeId),
+      ["south-gate", "compton"]
+    );
+    assert.ok(result.candidates.every((candidate: any) => candidate.name && candidate.name !== candidate.placeId));
+    assert.ok(result.candidates.every((candidate: any) => candidate.googleMapsUrl.includes("api=1")));
+    assert.equal(exactCalls.length, 3);
+    assert.match(result.warnings.join(" "), /exact transit time exceeded 60 minutes/);
+  } finally {
+    if (originalAck === undefined) delete process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK;
+    else process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK = originalAck;
+    GoogleMapsTools.prototype.geocode = originalGeocode;
+    GroundingLiteService.prototype.searchPlaces = originalGroundingSearch;
+    NewPlacesService.prototype.searchText = originalPlacesSearch;
+    RoutesService.prototype.computeRouteMatrix = originalMatrix;
+    RoutesService.prototype.computeRoutes = originalRoutes;
+  }
+});
+
+test("Grounding-only transit finalists are hydrated without enriching rejected candidates", async () => {
+  const originalAck = process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK;
+  const originalGeocode = GoogleMapsTools.prototype.geocode;
+  const originalGroundingSearch = GroundingLiteService.prototype.searchPlaces;
+  const originalPlacesSearch = NewPlacesService.prototype.searchText;
+  const originalPlaceDetails = NewPlacesService.prototype.getPlaceDetails;
+  const originalMatrix = RoutesService.prototype.computeRouteMatrix;
+  const originalRoutes = RoutesService.prototype.computeRoutes;
+  const detailCalls: string[] = [];
+  process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK = "true";
+  GoogleMapsTools.prototype.geocode = async function () {
+    return { location: { lat: 34.023, lng: -118.286 }, formatted_address: "USC Village", place_id: "origin" };
+  };
+  GroundingLiteService.prototype.searchPlaces = async function () {
+    return {
+      structuredContent: {
+        places: [
+          { place: "places/near", location: { latitude: 34.0, longitude: -118.2 } },
+          { place: "places/far", location: { latitude: 35.0, longitude: -117.0 } },
+        ],
+      },
+    };
+  };
+  NewPlacesService.prototype.searchText = async function () {
+    return [];
+  };
+  NewPlacesService.prototype.getPlaceDetails = async function (placeId) {
+    detailCalls.push(placeId);
+    return {
+      name: "Near Place",
+      place_id: "near",
+      formatted_address: "Near Place, Los Angeles, CA",
+      geometry: { location: { lat: 34.0, lng: -118.2 } },
+    };
+  };
+  RoutesService.prototype.computeRouteMatrix = async function (params) {
+    return {
+      distances: params.origins.map(() => params.destinations.map(() => ({ value: 1, text: "1 m" }))),
+      durations: params.origins.map(() =>
+        params.destinations.map((destination) => ({
+          value: destination.includes("far") ? 7000 : 1800,
+          text: "30 mins",
+        }))
+      ),
+      origin_addresses: params.origins,
+      destination_addresses: params.destinations,
+    };
+  };
+  RoutesService.prototype.computeRoutes = async function () {
+    return { routes: [{ legs: [] }], total_duration: { value: 1800, text: "30 mins" } };
+  };
+  try {
+    const result = await new TransitDiscoveryService("test-key").findPlacesByTransit({
+      origin: "USC Village, Los Angeles, CA",
+      query: "a nearby place",
+      maxMinutes: 60,
+      plannerMode: "conservative",
+    });
+    assert.deepEqual(detailCalls, ["near"]);
+    assert.equal(result.candidates.length, 1);
+    assert.equal(result.candidates[0].name, "Near Place");
+    assert.equal(result.candidates[0].placeId, "near");
+  } finally {
+    if (originalAck === undefined) delete process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK;
+    else process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK = originalAck;
+    GoogleMapsTools.prototype.geocode = originalGeocode;
+    GroundingLiteService.prototype.searchPlaces = originalGroundingSearch;
+    NewPlacesService.prototype.searchText = originalPlacesSearch;
+    NewPlacesService.prototype.getPlaceDetails = originalPlaceDetails;
+    RoutesService.prototype.computeRouteMatrix = originalMatrix;
+    RoutesService.prototype.computeRoutes = originalRoutes;
+  }
+});
+
+test("complete transit route duration includes waiting and final walking", async () => {
+  const initial = new Date("2030-01-01T10:00:00.000Z");
+  const fakeRoutes = {
+    computeRoutes: async () => ({
+      routes: [
+        {
+          legs: [
+            { steps: [{ travelMode: "WALK", staticDuration: "300s" }] },
+            {
+              steps: [
+                {
+                  travelMode: "TRANSIT",
+                  staticDuration: "1800s",
+                  transitDetails: {
+                    stopDetails: {
+                      departureTime: "2030-01-01T10:10:00.000Z",
+                      arrivalTime: "2030-01-01T10:40:00.000Z",
+                    },
+                    transitLine: { shortName: "M1" },
+                  },
+                },
+              ],
+            },
+            { steps: [{ travelMode: "WALK", staticDuration: "200s" }] },
+          ],
+        },
+      ],
+      total_duration: { value: 3000, text: "50 mins" },
+    }),
+  } as unknown as RoutesService;
+
+  const itinerary = await new TransitItineraryService(fakeRoutes).routeFixedPath({
+    locations: ["A", "B"],
+    departureTime: initial,
+  });
+  const leg = itinerary.legs[0];
+  assert.equal(leg.departureTime, "2030-01-01T10:00:00.000Z");
+  assert.equal(leg.arrivalTime, "2030-01-01T10:50:00.000Z");
+  assert.equal(leg.firstTransitDepartureTime, "2030-01-01T10:10:00.000Z");
+  assert.equal(leg.lastTransitArrivalTime, "2030-01-01T10:40:00.000Z");
+  assert.equal(leg.walkingSeconds, 500);
+  assert.equal(leg.transitSeconds, 1800);
+  assert.equal(leg.waitingSeconds, 700);
+  assert.equal(itinerary.totalElapsedSeconds, 3000);
+  assert.equal(itinerary.travelSeconds, 3000);
+  assert.equal(itinerary.travelSeconds, itinerary.totalElapsedSeconds);
 });

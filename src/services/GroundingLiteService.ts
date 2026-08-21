@@ -4,6 +4,13 @@ import { withAccounting } from "./requestAccounting.js";
 
 const GROUNDING_ENDPOINT = "https://mapstools.googleapis.com/mcp";
 
+export interface GroundingLocationBias {
+  circle: {
+    center: { latitude: number; longitude: number };
+    radius: number;
+  };
+}
+
 export class GroundingLiteService {
   private clientPromise: Promise<Client> | null = null;
   private readonly apiKey: string;
@@ -18,7 +25,11 @@ export class GroundingLiteService {
     }
   }
 
-  async searchPlaces(textQuery: string, parentTool = "maps_grounded_search"): Promise<any> {
+  async searchPlaces(
+    textQuery: string,
+    parentTool = "maps_grounded_search",
+    locationBias?: GroundingLocationBias
+  ): Promise<any> {
     const client = await this.client();
     return withAccounting(
       {
@@ -31,7 +42,13 @@ export class GroundingLiteService {
         fanout: "S",
       },
       async () => {
-        const result = await client.callTool({ name: "search_places", arguments: { text_query: textQuery } });
+        const result = await client.callTool({
+          name: "search_places",
+          arguments: {
+            text_query: textQuery,
+            ...(locationBias ? { location_bias: locationBias } : {}),
+          },
+        });
         if (result.isError) throw new Error("Grounding Lite search_places returned an error");
         return result;
       },

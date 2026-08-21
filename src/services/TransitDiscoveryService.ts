@@ -1,4 +1,5 @@
-import { GroundingLiteService } from "./GroundingLiteService.js";
+import { GroundingLiteService, GroundingLocationBias } from "./GroundingLiteService.js";
+import { GoogleMapsTools } from "./toolclass.js";
 import { NewPlacesService } from "./NewPlacesService.js";
 import { RoutesService, TransitPreference } from "./RoutesService.js";
 import {
@@ -8,6 +9,16 @@ import {
   TransitItineraryService,
 } from "./TransitItineraryService.js";
 import { PlannerMode, plannerLimits } from "./costPolicy.js";
+import { createPlaceUrl } from "./mapsUrlService.js";
+import { LocationInput, parseLocationInput } from "./location.js";
+
+const DISCOVERY_BIAS_RADIUS_METERS = 25_000;
+
+interface DiscoveryBias {
+  lat: number;
+  lng: number;
+  radius: number;
+}
 
 export interface TransitPlaceCandidate {
   name: string;
@@ -25,13 +36,26 @@ export class TransitDiscoveryService {
 
   async findPlacesByTransit(params: {
     origin: string;
+    originInput?: LocationInput;
     query: string;
     departureTime?: Date;
     objective?: "fastest" | "fewest_transfers" | "least_walking" | "balanced";
     plannerMode?: PlannerMode;
     maxMinutes?: number;
   }): Promise<any> {
-    const candidates = await this.discover(params.query, params.plannerMode);
+    const placesService = new NewPlacesService(this.apiKey);
+    const discoveryBias = await this.resolveDiscoveryBias(
+      params.originInput || parseLocationInput(params.origin),
+      placesService,
+      "maps_find_places_by_transit"
+    );
+    const candidates = await this.discover(
+      params.query,
+      params.plannerMode,
+      "maps_find_places_by_transit",
+      discoveryBias,
+      placesService
+    );
     if (!candidates.length) throw new Error(`No places found for "${params.query}".`);
     const routes = new RoutesService(this.apiKey);
     const itinerary = new TransitItineraryService(routes);
@@ -56,15 +80,30 @@ export class TransitDiscoveryService {
         (candidate) => params.maxMinutes === undefined || candidate.coarseDurationSeconds! <= params.maxMinutes * 60
       )
       .sort((left, right) => scoreCandidate(left, right, params.objective || "fastest"));
-    const finalists = ranked.slice(0, plannerLimits(params.plannerMode).exactRoutes);
-    for (const candidate of finalists) {
-      candidate.exactItinerary = await itinerary.routeFixedPath({
-        locations: [params.origin, locationString(candidate)],
+    const finalistPool = ranked.slice(0, plannerLimits(params.plannerMode).exactRoutes);
+    const finalists: TransitPlaceCandidate[] = [];
+    const warnings: string[] = [];
+    for (const candidate of finalistPool) {
+      const hydrated = await this.hydrateCandidate(candidate, placesService, "maps_find_places_by_transit");
+      if (!isCompleteCandidateIdentity(hydrated)) {
+        warnings.push("A shortlisted place was omitted because Google did not return a human-readable identity.");
+        continue;
+      }
+      hydrated.exactItinerary = await itinerary.routeFixedPath({
+        locations: [params.origin, locationString(hydrated)],
         departureTime: params.departureTime,
         objective: params.objective,
         plannerMode: params.plannerMode,
         parentTool: "maps_find_places_by_transit",
       });
+      if (
+        params.maxMinutes !== undefined &&
+        (hydrated.exactItinerary as any).totalElapsedSeconds > params.maxMinutes * 60
+      ) {
+        warnings.push(`A candidate was omitted because its exact transit time exceeded ${params.maxMinutes} minutes.`);
+        continue;
+      }
+      finalists.push(hydrated);
     }
     finalists.sort(
       (left, right) =>
@@ -75,10 +114,12 @@ export class TransitDiscoveryService {
       query: params.query,
       origin: params.origin,
       candidates: finalists,
-      warnings:
-        ranked.length > finalists.length
-          ? [`${ranked.length - finalists.length} candidates were not exact-routed due to the planner guard.`]
-          : [],
+      warnings: [
+        ...(ranked.length > finalistPool.length
+          ? [`${ranked.length - finalistPool.length} candidates were not exact-routed due to the planner guard.`]
+          : []),
+        ...warnings,
+      ],
     };
   }
 
@@ -197,27 +238,75 @@ export class TransitDiscoveryService {
   private async discover(
     query: string,
     mode: PlannerMode = "conservative",
-    parentTool = "maps_find_places_by_transit"
+    parentTool = "maps_find_places_by_transit",
+    locationBias?: DiscoveryBias,
+    placesService = new NewPlacesService(this.apiKey)
   ): Promise<TransitPlaceCandidate[]> {
+    const groundedCandidates: TransitPlaceCandidate[] = [];
     try {
-      const grounded = await new GroundingLiteService(this.apiKey).searchPlaces(query, parentTool);
-      const parsed = extractGroundedPlaces(grounded);
-      if (parsed.length) return parsed;
+      const grounded = await new GroundingLiteService(this.apiKey).searchPlaces(
+        query,
+        parentTool,
+        locationBias ? toGroundingLocationBias(locationBias) : undefined
+      );
+      groundedCandidates.push(...extractGroundedPlaces(grounded).slice(0, plannerLimits(mode).candidatesPerGroup));
     } catch {
-      // Places search is a deliberately minimal fallback when Grounding Lite is unavailable.
+      // Places remains available when Grounding Lite is unavailable.
     }
-    const places = await new NewPlacesService(this.apiKey).searchText({
+
+    const places = await placesService.searchText({
       textQuery: query,
+      locationBias,
       maxResultCount: plannerLimits(mode).candidatesPerGroup,
       parentTool,
     });
-    return places.map((place: any) => ({
-      name: place.name,
-      placeId: place.place_id,
-      address: place.formatted_address,
-      latitude: place.geometry?.location?.lat,
-      longitude: place.geometry?.location?.lng,
-    }));
+    const placeCandidates = places.map(candidateFromPlace);
+    return mergeCandidates([...placeCandidates, ...groundedCandidates])
+      .sort((left, right) => compareDiscoveryDistance(left, right, locationBias))
+      .slice(0, plannerLimits(mode).candidatesPerGroup);
+  }
+
+  private async resolveDiscoveryBias(
+    originInput: LocationInput,
+    placesService: NewPlacesService,
+    parentTool: string
+  ): Promise<DiscoveryBias> {
+    if (originInput.kind === "coordinates")
+      return { lat: originInput.latitude, lng: originInput.longitude, radius: DISCOVERY_BIAS_RADIUS_METERS };
+
+    if (originInput.kind === "place_id") {
+      const place = await placesService.getPlaceDetails(originInput.value, [], parentTool);
+      const coordinates = coordinatesFromPlace(place);
+      if (coordinates) return { ...coordinates, radius: DISCOVERY_BIAS_RADIUS_METERS };
+      throw new Error("The transit origin Place ID did not return coordinates for discovery bias.");
+    }
+
+    if (originInput.kind === "query") {
+      const result = await new GoogleMapsTools(this.apiKey).geocode(originInput.value, parentTool);
+      if (result.location)
+        return { lat: result.location.lat, lng: result.location.lng, radius: DISCOVERY_BIAS_RADIUS_METERS };
+    }
+
+    throw new Error("The transit origin could not be converted to coordinates for discovery bias.");
+  }
+
+  private async hydrateCandidate(
+    candidate: TransitPlaceCandidate,
+    placesService: NewPlacesService,
+    parentTool: string
+  ): Promise<TransitPlaceCandidate> {
+    if (!needsCandidateHydration(candidate)) return withLocalPlaceUrl(candidate);
+    if (!candidate.placeId) return candidate;
+    try {
+      return withLocalPlaceUrl(
+        mergeCandidate(
+          candidate,
+          candidateFromPlace(await placesService.getPlaceDetails(candidate.placeId, [], parentTool))
+        )
+      );
+    } catch {
+      return candidate;
+    }
   }
 }
 
@@ -226,6 +315,113 @@ function locationString(candidate: TransitPlaceCandidate): string {
   if (candidate.latitude !== undefined && candidate.longitude !== undefined)
     return `${candidate.latitude},${candidate.longitude}`;
   return candidate.address || candidate.name;
+}
+
+function toGroundingLocationBias(locationBias: DiscoveryBias): GroundingLocationBias {
+  return {
+    circle: {
+      center: { latitude: locationBias.lat, longitude: locationBias.lng },
+      radius: locationBias.radius,
+    },
+  };
+}
+
+function candidateFromPlace(place: any): TransitPlaceCandidate {
+  return withLocalPlaceUrl({
+    name: typeof place.name === "string" ? place.name : "",
+    placeId: typeof place.place_id === "string" ? place.place_id : undefined,
+    address: typeof place.formatted_address === "string" ? place.formatted_address : undefined,
+    latitude: place.geometry?.location?.lat,
+    longitude: place.geometry?.location?.lng,
+  });
+}
+
+function coordinatesFromPlace(place: any): { lat: number; lng: number } | undefined {
+  const latitude = place?.geometry?.location?.lat;
+  const longitude = place?.geometry?.location?.lng;
+  return typeof latitude === "number" && typeof longitude === "number" ? { lat: latitude, lng: longitude } : undefined;
+}
+
+function withLocalPlaceUrl(candidate: TransitPlaceCandidate): TransitPlaceCandidate {
+  candidate.googleMapsUrl = createPlaceUrl({
+    label: candidate.name || candidate.address,
+    address: candidate.address,
+    placeId: candidate.placeId,
+    coordinates:
+      candidate.latitude !== undefined && candidate.longitude !== undefined
+        ? { latitude: candidate.latitude, longitude: candidate.longitude }
+        : undefined,
+  });
+  return candidate;
+}
+
+function mergeCandidate(existing: TransitPlaceCandidate, incoming: TransitPlaceCandidate): TransitPlaceCandidate {
+  const merged = { ...existing };
+  for (const key of ["name", "placeId", "address", "latitude", "longitude", "googleMapsUrl"] as const) {
+    const value = incoming[key];
+    if (
+      value !== undefined &&
+      value !== null &&
+      value !== "" &&
+      (merged[key] === undefined || merged[key] === null || merged[key] === "")
+    )
+      merged[key] = value as never;
+  }
+  return withLocalPlaceUrl(merged);
+}
+
+function mergeCandidates(candidates: TransitPlaceCandidate[]): TransitPlaceCandidate[] {
+  const merged = new Map<string, TransitPlaceCandidate>();
+  for (const candidate of candidates) {
+    const key = candidate.placeId
+      ? `place:${candidate.placeId}`
+      : `candidate:${candidate.name}|${candidate.address}|${candidate.latitude}|${candidate.longitude}`;
+    const existing = merged.get(key);
+    merged.set(key, existing ? mergeCandidate(existing, candidate) : withLocalPlaceUrl({ ...candidate }));
+  }
+  return [...merged.values()];
+}
+
+function isCompleteCandidateIdentity(candidate: TransitPlaceCandidate): boolean {
+  return Boolean(
+    candidate.placeId && candidate.name && candidate.name !== candidate.placeId && !candidate.name.startsWith("places/")
+  );
+}
+
+function needsCandidateHydration(candidate: TransitPlaceCandidate): boolean {
+  return (
+    !isCompleteCandidateIdentity(candidate) ||
+    !candidate.address ||
+    candidate.latitude === undefined ||
+    candidate.longitude === undefined
+  );
+}
+
+function compareDiscoveryDistance(
+  left: TransitPlaceCandidate,
+  right: TransitPlaceCandidate,
+  origin?: DiscoveryBias
+): number {
+  const leftDistance = origin && distanceMeters(left, origin);
+  const rightDistance = origin && distanceMeters(right, origin);
+  if (leftDistance !== undefined && rightDistance !== undefined) return leftDistance - rightDistance;
+  if (leftDistance !== undefined) return -1;
+  if (rightDistance !== undefined) return 1;
+  return left.name.localeCompare(right.name);
+}
+
+function distanceMeters(candidate: TransitPlaceCandidate, origin: DiscoveryBias): number | undefined {
+  if (candidate.latitude === undefined || candidate.longitude === undefined) return undefined;
+  const earthRadiusMeters = 6_371_000;
+  const toRadians = (value: number) => (value * Math.PI) / 180;
+  const latitudeDelta = toRadians(candidate.latitude - origin.lat);
+  const longitudeDelta = toRadians(candidate.longitude - origin.lng);
+  const latitudeOne = toRadians(origin.lat);
+  const latitudeTwo = toRadians(candidate.latitude);
+  const haversine =
+    Math.sin(latitudeDelta / 2) ** 2 +
+    Math.cos(latitudeOne) * Math.cos(latitudeTwo) * Math.sin(longitudeDelta / 2) ** 2;
+  return 2 * earthRadiusMeters * Math.asin(Math.sqrt(haversine));
 }
 
 function scoreCandidate(left: TransitPlaceCandidate, right: TransitPlaceCandidate, objective: string): number {
@@ -239,34 +435,53 @@ function scoreCandidate(left: TransitPlaceCandidate, right: TransitPlaceCandidat
 function extractGroundedPlaces(value: any): TransitPlaceCandidate[] {
   const found: TransitPlaceCandidate[] = [];
   const seen = new Set<string>();
-  const visit = (node: any) => {
-    if (!node || typeof node !== "object") return;
-    const placeId = node.placeId || node.place_id || node.id;
-    const name = node.name || node.displayName?.text || node.display_name;
-    const location = node.location || node.coordinates;
-    const latitude = location?.latitude ?? location?.lat;
-    const longitude = location?.longitude ?? location?.lng;
-    if (
-      (placeId || name) &&
-      (latitude !== undefined || node.formattedAddress || node.formatted_address || node.googleMapsLinks)
-    ) {
+  for (const payload of structuredPayloads(value)) {
+    const places = payload?.places;
+    if (!Array.isArray(places)) continue;
+    for (const node of places) {
+      const placeId = normalizePlaceId(node?.place || node?.placeId || node?.place_id || node?.id);
+      const name = node?.displayName?.text || node?.name || node?.display_name;
+      const location = node?.location || node?.coordinates;
+      const latitude = location?.latitude ?? location?.lat;
+      const longitude = location?.longitude ?? location?.lng;
+      if (!placeId && typeof name !== "string") continue;
       const key = String(placeId || `${name}|${latitude}|${longitude}`);
-      if (!seen.has(key)) {
-        seen.add(key);
-        found.push({
-          name: typeof name === "string" ? name : String(placeId),
+      if (seen.has(key)) continue;
+      seen.add(key);
+      found.push(
+        withLocalPlaceUrl({
+          name: typeof name === "string" ? name : "",
           placeId,
-          address: node.formattedAddress || node.formatted_address,
+          address: node?.formattedAddress || node?.formatted_address,
           latitude,
           longitude,
-          googleMapsUrl: node.googleMapsLinks?.placeUrl || node.google_maps_url,
-        });
-      }
+          googleMapsUrl: node?.googleMapsLinks?.placeUrl || node?.googleMapsLinks?.placeUri,
+        })
+      );
     }
-    for (const child of Object.values(node)) visit(child);
-  };
-  visit(value);
+  }
   return found;
+}
+
+function normalizePlaceId(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value) return undefined;
+  return value.startsWith("places/") ? value.slice("places/".length) : value;
+}
+
+function structuredPayloads(value: any): any[] {
+  const payloads: any[] = [];
+  if (value?.structuredContent) payloads.push(value.structuredContent);
+  const content = value?.content;
+  for (const block of Array.isArray(content) ? content : content ? [content] : []) {
+    if (typeof block?.text !== "string") continue;
+    try {
+      payloads.push(JSON.parse(block.text));
+    } catch {
+      // Ignore non-JSON narrative blocks; structured place data is handled above.
+    }
+  }
+  if (!payloads.length && value) payloads.push(value);
+  return payloads;
 }
 
 interface ErrandChoice {

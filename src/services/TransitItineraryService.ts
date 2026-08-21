@@ -9,6 +9,8 @@ export interface TransitLeg {
   durationSeconds: number;
   arrivalTime: string;
   departureTime: string;
+  firstTransitDepartureTime?: string;
+  lastTransitArrivalTime?: string;
   transfers?: number;
   walkingSeconds?: number;
   transitSeconds?: number;
@@ -91,16 +93,18 @@ export class TransitItineraryService {
       });
       const route = result.routes[0];
       const durationSeconds = result.total_duration.value;
-      const arrivalTime =
-        extractArrivalTime(route) || new Date(nextDeparture.getTime() + durationSeconds * 1000).toISOString();
-      const departureTime = extractDepartureTime(route) || nextDeparture.toISOString();
+      const arrivalTime = new Date(nextDeparture.getTime() + durationSeconds * 1000).toISOString();
+      const firstTransitDepartureTime = extractFirstTransitDepartureTime(route);
+      const lastTransitArrivalTime = extractLastTransitArrivalTime(route);
       const summary = summarizeTransitRoute(route);
       legs.push({
         from,
         to,
         durationSeconds,
         arrivalTime,
-        departureTime,
+        departureTime: nextDeparture.toISOString(),
+        firstTransitDepartureTime,
+        lastTransitArrivalTime,
         transfers: summary.transfers,
         walkingSeconds: summary.walkingSeconds,
         transitSeconds: summary.transitSeconds,
@@ -267,7 +271,7 @@ function reorderedDwellMinutes(
     );
 }
 
-function extractArrivalTime(route: any): string | undefined {
+function extractLastTransitArrivalTime(route: any): string | undefined {
   const values: string[] = [];
   for (const leg of route?.legs || [])
     for (const step of leg.steps || []) {
@@ -277,7 +281,7 @@ function extractArrivalTime(route: any): string | undefined {
   return values.at(-1);
 }
 
-function extractDepartureTime(route: any): string | undefined {
+function extractFirstTransitDepartureTime(route: any): string | undefined {
   for (const leg of route?.legs || [])
     for (const step of leg.steps || []) {
       const value = step.transitDetails?.stopDetails?.departureTime;

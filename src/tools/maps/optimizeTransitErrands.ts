@@ -6,7 +6,7 @@ import { GroundingLiteService } from "../../services/GroundingLiteService.js";
 
 const NAME = "maps_optimize_transit_errands";
 const DESCRIPTION =
-  "Choose both the branch and visit order for several transit errands, then return the best chronological itinerary and alternatives. Use when errands may be queries such as 'an IKEA' or fixed locations; use maps_plan_transit when every stop is already known and only order may change. Candidate discovery and exact rerouting are bounded, and non-time objectives use a duration-based shortlist, so they are heuristics rather than guaranteed global optima. Cost: T1 | Fan-out: L.";
+  "Choose both the branch and visit order for several transit errands, then return the best chronological itinerary and alternatives. Use when errands may be queries such as 'an IKEA' or fixed locations; use maps_plan_transit when every stop is already known and only order may change. Candidate discovery combines bounded semantic and literal search, and exact rankings use complete arrival times including dwell; non-time objectives still use a duration-based shortlist, so they are heuristics rather than guaranteed global optima. Cost: T1 | Fan-out: L.";
 const SCHEMA = {
   origin: locationInputSchema.describe("Trip starting point as a query, Place ID, coordinates, or Maps URL."),
   errands: z
@@ -40,7 +40,12 @@ const SCHEMA = {
     .boolean()
     .default(false)
     .describe("Set true to return to origin after all errands; do not combine with a different final_destination."),
-  departure_time: z.string().optional().describe("ISO 8601 departure time for the first leg; defaults to now."),
+  departure_time: z
+    .string()
+    .optional()
+    .describe(
+      "ISO 8601 timestamp for the requested start of the first leg; defaults to now. Later legs use complete arrival plus each errand's dwell."
+    ),
   objective: z
     .enum(["fastest", "fewest_transfers", "least_walking", "balanced"])
     .default("fastest")
