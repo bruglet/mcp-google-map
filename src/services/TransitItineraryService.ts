@@ -118,10 +118,7 @@ export class TransitItineraryService {
       const durationSeconds = timing.durationMilliseconds / 1000;
       const arrivalTime = new Date(timing.arrivalTimeMilliseconds).toISOString();
       const summary = timing.summary;
-      if (timing.normalizedDurationMismatch)
-        warnings.push(
-          "The Routes adapter duration differed from the raw route duration; the validated raw duration was used."
-        );
+      warnings.push(...timing.warnings);
       legs.push({
         from,
         to,
@@ -180,7 +177,7 @@ export class TransitItineraryService {
       waitingSeconds,
       transfers,
       legs,
-      warnings,
+      warnings: [...new Set(warnings)],
     };
   }
 
@@ -334,7 +331,7 @@ interface TransitRouteTiming {
   arrivalTimeMilliseconds: number;
   firstTransitDepartureTime?: string;
   lastTransitArrivalTime?: string;
-  normalizedDurationMismatch: boolean;
+  warnings: string[];
   summary: TransitRouteSummary;
 }
 
@@ -349,30 +346,36 @@ function validateTransitRoute(
   const routeDurationMilliseconds = parseDurationMilliseconds(route?.duration);
   if (routeDurationMilliseconds === undefined)
     throw new TransitChronologyError("Google returned no valid raw route duration.");
+  const warnings: string[] = [];
   const routeLegs = Array.isArray(route?.legs) ? route.legs : [];
-  if (!routeLegs.length) throw new TransitChronologyError("Google returned no route legs for the transit itinerary.");
-  const legDurations = routeLegs.map((leg: any) => parseDurationMilliseconds(leg?.duration));
-  if (legDurations.some((duration: number | undefined) => duration === undefined))
-    throw new TransitChronologyError("Google returned a route leg without a valid duration.");
-  const summedLegDurationMilliseconds = legDurations.reduce(
-    (sum: number, duration: number | undefined) => sum + (duration || 0),
-    0
-  );
-  if (Math.abs(routeDurationMilliseconds - summedLegDurationMilliseconds) > TIMING_TOLERANCE_MILLISECONDS)
-    throw new TransitChronologyError("Google route and leg durations disagree.");
+  if (!routeLegs.length)
+    warnings.push("Google returned no route legs; only aggregate door-to-door timing is available.");
+  else {
+    const legDurations = routeLegs.map((leg: any) => parseDurationMilliseconds(leg?.duration));
+    if (legDurations.every((duration: number | undefined) => duration !== undefined)) {
+      const summedLegDurationMilliseconds = legDurations.reduce(
+        (sum: number, duration: number | undefined) => sum + (duration || 0),
+        0
+      );
+      if (Math.abs(routeDurationMilliseconds - summedLegDurationMilliseconds) > TIMING_TOLERANCE_MILLISECONDS)
+        warnings.push("Google route and leg duration estimates differ; aggregate route timing was retained.");
+    } else warnings.push("Google omitted a route-leg duration; aggregate route timing was retained.");
+  }
 
   const normalizedDurationMilliseconds = secondsToMilliseconds(normalizedDurationSeconds);
-  const normalizedDurationMismatch =
+  if (
     normalizedDurationMilliseconds !== undefined &&
-    Math.abs(normalizedDurationMilliseconds - routeDurationMilliseconds) > TIMING_TOLERANCE_MILLISECONDS;
-  const arrivalTimeMilliseconds = departureTime.getTime() + routeDurationMilliseconds;
+    Math.abs(normalizedDurationMilliseconds - routeDurationMilliseconds) > TIMING_TOLERANCE_MILLISECONDS
+  )
+    warnings.push("The Routes adapter duration differed from the raw route duration; the raw estimate was retained.");
+  const aggregateArrivalTimeMilliseconds = departureTime.getTime() + routeDurationMilliseconds;
 
   const summary: TransitRouteSummary = { lines: [], stops: [] };
   if (detailLevel === "summary")
     return {
       durationMilliseconds: routeDurationMilliseconds,
-      arrivalTimeMilliseconds,
-      normalizedDurationMismatch,
+      arrivalTimeMilliseconds: aggregateArrivalTimeMilliseconds,
+      warnings,
       summary,
     };
 
@@ -380,59 +383,64 @@ function validateTransitRoute(
   if (!steps.length)
     return {
       durationMilliseconds: routeDurationMilliseconds,
-      arrivalTimeMilliseconds,
-      normalizedDurationMismatch,
+      arrivalTimeMilliseconds: aggregateArrivalTimeMilliseconds,
+      warnings,
       summary,
     };
 
   const lines = new Set<string>();
   const stops = new Set<string>();
-  let cursorMilliseconds = departureTime.getTime();
   let walkingMilliseconds = 0;
   let transitMilliseconds = 0;
-  let waitingMilliseconds = 0;
   let transitStepCount = 0;
+  let walkingDurationsComplete = true;
+  let transitTimestampsComplete = true;
+  let categoryBreakdownComplete = true;
   let firstTransitDepartureMilliseconds: number | undefined;
   let lastTransitArrivalMilliseconds: number | undefined;
-  let walkingAfterLastTransitMilliseconds = 0;
-  let sawTransit = false;
+  let latestKnownTransitEventMilliseconds: number | undefined;
+  let lastKnownTransitEventMilliseconds: number | undefined;
+  let lastTransitStepIndex = -1;
 
-  for (const step of steps) {
+  for (let stepIndex = 0; stepIndex < steps.length; stepIndex++) {
+    const step = steps[stepIndex];
     const mode = step.travelMode || "";
     if (mode === "WALK") {
       const durationMilliseconds = parseDurationMilliseconds(step.staticDuration || step.duration);
-      if (durationMilliseconds === undefined)
-        throw new TransitChronologyError("Google returned a walking step without a valid duration.");
-      walkingMilliseconds += durationMilliseconds;
-      cursorMilliseconds += durationMilliseconds;
-      if (sawTransit) walkingAfterLastTransitMilliseconds += durationMilliseconds;
+      if (durationMilliseconds === undefined) {
+        walkingDurationsComplete = false;
+        categoryBreakdownComplete = false;
+      } else walkingMilliseconds += durationMilliseconds;
       continue;
     }
 
-    if (!step.transitDetails)
-      throw new TransitChronologyError("Google returned a transit itinerary step without transit timestamps.");
+    if (!step.transitDetails) {
+      categoryBreakdownComplete = false;
+      continue;
+    }
+    lastTransitStepIndex = stepIndex;
+    transitStepCount++;
     const stopDetails = step.transitDetails.stopDetails;
     const departureMilliseconds = parseTimestampMilliseconds(stopDetails?.departureTime);
     const arrivalMilliseconds = parseTimestampMilliseconds(stopDetails?.arrivalTime);
-    if (departureMilliseconds === undefined || arrivalMilliseconds === undefined)
-      throw new TransitChronologyError(
-        "Google returned a transit step without valid departure and arrival timestamps."
-      );
-    if (arrivalMilliseconds < departureMilliseconds)
-      throw new TransitChronologyError("Google returned a transit step whose arrival precedes its departure.");
-    if (departureMilliseconds < cursorMilliseconds)
-      throw new TransitChronologyError("Google returned transit timestamps that precede the preceding route activity.");
-    if (arrivalMilliseconds > arrivalTimeMilliseconds)
-      throw new TransitChronologyError("Google returned a transit event after the computed destination arrival.");
-
-    waitingMilliseconds += Math.max(0, departureMilliseconds - cursorMilliseconds);
-    transitMilliseconds += arrivalMilliseconds - departureMilliseconds;
-    cursorMilliseconds = arrivalMilliseconds;
-    sawTransit = true;
-    walkingAfterLastTransitMilliseconds = 0;
-    transitStepCount++;
-    firstTransitDepartureMilliseconds ??= departureMilliseconds;
-    lastTransitArrivalMilliseconds = arrivalMilliseconds;
+    if (departureMilliseconds === undefined || arrivalMilliseconds === undefined) {
+      transitTimestampsComplete = false;
+      categoryBreakdownComplete = false;
+    }
+    for (const eventMilliseconds of [departureMilliseconds, arrivalMilliseconds]) {
+      if (eventMilliseconds === undefined) continue;
+      if (eventMilliseconds < departureTime.getTime())
+        throw new TransitChronologyError("Google returned a transit event before the requested leg departure.");
+      if (lastKnownTransitEventMilliseconds !== undefined && eventMilliseconds < lastKnownTransitEventMilliseconds)
+        throw new TransitChronologyError("Google returned non-chronological transit events.");
+      lastKnownTransitEventMilliseconds = eventMilliseconds;
+      latestKnownTransitEventMilliseconds = eventMilliseconds;
+    }
+    if (departureMilliseconds !== undefined && arrivalMilliseconds !== undefined) {
+      transitMilliseconds += arrivalMilliseconds - departureMilliseconds;
+      firstTransitDepartureMilliseconds ??= departureMilliseconds;
+      lastTransitArrivalMilliseconds = arrivalMilliseconds;
+    }
 
     const line = step.transitDetails.transitLine;
     const lineName = line?.name || line?.shortName;
@@ -443,38 +451,75 @@ function validateTransitRoute(
     if (arrivalStop) stops.add(arrivalStop);
   }
 
-  if (cursorMilliseconds > arrivalTimeMilliseconds)
-    throw new TransitChronologyError("Google route step durations exceed the complete route duration.");
-  waitingMilliseconds += Math.max(0, arrivalTimeMilliseconds - cursorMilliseconds);
-  if (
-    walkingAfterLastTransitMilliseconds > 0 &&
-    lastTransitArrivalMilliseconds !== undefined &&
-    arrivalTimeMilliseconds <= lastTransitArrivalMilliseconds
-  )
-    throw new TransitChronologyError("Google route destination arrival does not include post-transit walking.");
+  if (!walkingDurationsComplete)
+    warnings.push("Google omitted a walking-step duration; walking and waiting breakdowns are incomplete.");
+  if (!transitTimestampsComplete)
+    warnings.push("Google omitted a transit timestamp; vehicle and waiting breakdowns are incomplete.");
+  if (!categoryBreakdownComplete && walkingDurationsComplete && transitTimestampsComplete)
+    warnings.push("Google returned an unclassified route step; the waiting breakdown is unavailable.");
 
-  const classifiedMilliseconds = walkingMilliseconds + transitMilliseconds + waitingMilliseconds;
-  if (classifiedMilliseconds !== routeDurationMilliseconds)
-    throw new TransitChronologyError(
-      "Transit walking, vehicle, and waiting durations do not reconcile with the route duration."
+  let scheduleLowerBoundMilliseconds = latestKnownTransitEventMilliseconds;
+  if (transitTimestampsComplete && lastTransitArrivalMilliseconds !== undefined && lastTransitStepIndex >= 0) {
+    const postTransitSteps = steps.slice(lastTransitStepIndex + 1);
+    const postTransitWalkingDurations = postTransitSteps.map((step: any) =>
+      step.travelMode === "WALK" ? parseDurationMilliseconds(step.staticDuration || step.duration) : undefined
+    );
+    if (
+      postTransitSteps.length &&
+      postTransitWalkingDurations.every((duration: number | undefined) => duration !== undefined)
+    )
+      scheduleLowerBoundMilliseconds =
+        lastTransitArrivalMilliseconds +
+        postTransitWalkingDurations.reduce((sum: number, duration: number | undefined) => sum + (duration || 0), 0);
+  }
+  const arrivalTimeMilliseconds = Math.max(
+    aggregateArrivalTimeMilliseconds,
+    scheduleLowerBoundMilliseconds ?? aggregateArrivalTimeMilliseconds
+  );
+  const durationMilliseconds = arrivalTimeMilliseconds - departureTime.getTime();
+  if (arrivalTimeMilliseconds > aggregateArrivalTimeMilliseconds)
+    warnings.push(
+      "Scheduled transit events extend beyond the aggregate route estimate; the later schedule boundary was used."
     );
 
   summary.lines = [...lines];
   summary.stops = [...stops];
-  summary.transfers = Math.max(0, transitStepCount - 1);
-  summary.walkingSeconds = walkingMilliseconds / 1000;
-  summary.transitSeconds = transitMilliseconds / 1000;
-  summary.waitingSeconds = waitingMilliseconds / 1000;
+  if (transitStepCount === 0 && steps.every((step: any) => step.travelMode === "WALK")) {
+    if (
+      walkingDurationsComplete &&
+      Math.abs(walkingMilliseconds - durationMilliseconds) > TIMING_TOLERANCE_MILLISECONDS
+    )
+      warnings.push("Google walking-step and aggregate duration estimates differ; aggregate timing was retained.");
+    summary.transfers = 0;
+    summary.walkingSeconds = durationMilliseconds / 1000;
+    summary.transitSeconds = 0;
+    summary.waitingSeconds = 0;
+  } else {
+    summary.transfers = transitStepCount ? Math.max(0, transitStepCount - 1) : undefined;
+    summary.walkingSeconds = walkingDurationsComplete ? walkingMilliseconds / 1000 : undefined;
+    summary.transitSeconds = transitTimestampsComplete ? transitMilliseconds / 1000 : undefined;
+    if (categoryBreakdownComplete && walkingDurationsComplete && transitTimestampsComplete) {
+      const classifiedMilliseconds = walkingMilliseconds + transitMilliseconds;
+      if (classifiedMilliseconds <= durationMilliseconds)
+        summary.waitingSeconds = (durationMilliseconds - classifiedMilliseconds) / 1000;
+      else
+        warnings.push(
+          "Walking and transit estimates exceed door-to-door elapsed time; waiting was omitted rather than forcing reconciliation."
+        );
+    }
+  }
   return {
-    durationMilliseconds: routeDurationMilliseconds,
+    durationMilliseconds,
     arrivalTimeMilliseconds,
     firstTransitDepartureTime:
-      firstTransitDepartureMilliseconds === undefined
+      !transitTimestampsComplete || firstTransitDepartureMilliseconds === undefined
         ? undefined
         : new Date(firstTransitDepartureMilliseconds).toISOString(),
     lastTransitArrivalTime:
-      lastTransitArrivalMilliseconds === undefined ? undefined : new Date(lastTransitArrivalMilliseconds).toISOString(),
-    normalizedDurationMismatch,
+      !transitTimestampsComplete || lastTransitArrivalMilliseconds === undefined
+        ? undefined
+        : new Date(lastTransitArrivalMilliseconds).toISOString(),
+    warnings,
     summary,
   };
 }

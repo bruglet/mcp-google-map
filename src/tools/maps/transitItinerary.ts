@@ -7,7 +7,7 @@ import { GroundingLiteService } from "../../services/GroundingLiteService.js";
 
 const NAME = "maps_transit_itinerary";
 const DESCRIPTION =
-  "Return a chronological transit itinerary for locations that must be visited in the supplied order, including complete per-leg arrival/departure times, optional first-vehicle boarding and last-vehicle alighting times, lines, stops, transfers, non-overlapping walking/transit/waiting metrics, and one Maps URL per leg. Use for an ordered A-to-B-to-C trip; use maps_plan_transit when stop order may change or maps_directions for one transit leg. Each later leg starts after the prior destination arrival plus dwell; Google transit does not support intermediate waypoints. Cost: T1 | Fan-out: M.";
+  "Return a chronological transit itinerary for locations that must be visited in the supplied order, including complete per-leg arrival/departure times, optional vehicle boarding/alighting times, lines, stops, duration breakdowns, and one Maps URL per leg. Use for an ordered A-to-B-to-C trip; use maps_plan_transit when stop order may change or maps_directions for one transit leg. Each later leg starts after the prior destination arrival plus dwell; walking and transit breakdowns are estimates, and waiting is omitted with a warning when it cannot be reconciled safely. Google transit does not support intermediate waypoints. Cost: T1 | Fan-out: M.";
 const SCHEMA = {
   locations: z
     .array(locationInputSchema)
@@ -30,7 +30,7 @@ const SCHEMA = {
     .enum(["summary", "steps", "geometry", "full"])
     .default("steps")
     .describe(
-      "Use summary for timing only, steps for lines and transfers, geometry for polylines, or full when both are needed; defaults to steps."
+      "Use summary for complete timing only, steps for lines and best-effort duration breakdowns, geometry for polylines, or full when both are needed; defaults to steps."
     ),
   transit_modes: z
     .array(z.enum(["bus", "subway", "train", "light_rail", "rail"]))
