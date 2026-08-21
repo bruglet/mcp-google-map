@@ -6,6 +6,8 @@ import {
   computeBoundedTransitMatrix,
   inferredTransitPreference,
   scoreItinerary,
+  getTransitTimingError,
+  TransitTimingError,
   TransitItineraryService,
 } from "./TransitItineraryService.js";
 import { PlannerMode, plannerLimits } from "./costPolicy.js";
@@ -82,6 +84,7 @@ export class TransitDiscoveryService {
       .sort((left, right) => scoreCandidate(left, right, params.objective || "fastest"));
     const finalistPool = ranked.slice(0, plannerLimits(params.plannerMode).exactRoutes);
     const finalists: TransitPlaceCandidate[] = [];
+    const invalidFinalists: Array<TransitPlaceCandidate & { timingError: TransitTimingError }> = [];
     const warnings: string[] = [];
     for (const candidate of finalistPool) {
       const hydrated = await this.hydrateCandidate(candidate, placesService, "maps_find_places_by_transit");
@@ -89,31 +92,46 @@ export class TransitDiscoveryService {
         warnings.push("A shortlisted place was omitted because Google did not return a human-readable identity.");
         continue;
       }
-      hydrated.exactItinerary = await itinerary.routeFixedPath({
-        locations: [params.origin, locationString(hydrated)],
-        departureTime: params.departureTime,
-        objective: params.objective,
-        plannerMode: params.plannerMode,
-        parentTool: "maps_find_places_by_transit",
-      });
-      if (
-        params.maxMinutes !== undefined &&
-        (hydrated.exactItinerary as any).totalElapsedSeconds > params.maxMinutes * 60
-      ) {
-        warnings.push(`A candidate was omitted because its exact transit time exceeded ${params.maxMinutes} minutes.`);
-        continue;
+      try {
+        hydrated.exactItinerary = await itinerary.routeFixedPath({
+          locations: [params.origin, locationString(hydrated)],
+          departureTime: params.departureTime,
+          objective: params.objective,
+          plannerMode: params.plannerMode,
+          parentTool: "maps_find_places_by_transit",
+        });
+        if (
+          params.maxMinutes !== undefined &&
+          (hydrated.exactItinerary as any).totalElapsedSeconds > params.maxMinutes * 60
+        ) {
+          warnings.push(
+            `A candidate was omitted because its exact transit time exceeded ${params.maxMinutes} minutes.`
+          );
+          continue;
+        }
+        finalists.push(hydrated);
+      } catch (error) {
+        const timingError = getTransitTimingError(error);
+        if (!timingError) throw error;
+        invalidFinalists.push({ ...hydrated, timingError });
       }
-      finalists.push(hydrated);
     }
     finalists.sort(
       (left, right) =>
         scoreItinerary(left.exactItinerary as any, params.objective || "fastest") -
         scoreItinerary(right.exactItinerary as any, params.objective || "fastest")
     );
+    if (invalidFinalists.length) {
+      warnings.push(
+        `${invalidFinalists.length} exact finalist(s) were excluded because Google returned invalid chronology; their exact times were not verified against max_minutes.`
+      );
+      if (!finalists.length) warnings.push("No transit itinerary could be ranked safely from the exact finalists.");
+    }
     return {
       query: params.query,
       origin: params.origin,
       candidates: finalists,
+      invalidFinalists,
       warnings: [
         ...(ranked.length > finalistPool.length
           ? [`${ranked.length - finalistPool.length} candidates were not exact-routed due to the planner guard.`]
@@ -189,6 +207,10 @@ export class TransitDiscoveryService {
       limits.exactRoutes
     );
     const exact: any[] = [];
+    const invalidFinalists: Array<{
+      order: Array<{ groupIndex: number; location: string }>;
+      timingError: TransitTimingError;
+    }> = [];
     const itinerary = new TransitItineraryService(new RoutesService(this.apiKey));
     for (const candidate of coarse) {
       const locations = [
@@ -196,30 +218,45 @@ export class TransitDiscoveryService {
         ...candidate.order.map((choice) => locationString(choice.candidate)),
         ...(finalDestination ? [finalDestination] : []),
       ];
-      exact.push({
-        order: candidate.order.map((choice) => ({
-          groupIndex: choice.groupIndex,
-          location: locationString(choice.candidate),
-        })),
-        itinerary: await itinerary.routeFixedPath({
-          locations,
-          departureTime: params.departureTime,
-          objective: params.objective,
-          dwellMinutes: candidate.order.map((choice) => params.errands[choice.groupIndex].dwell_minutes || 0),
-          transitPreference: effectiveTransitPreference,
-          plannerMode: params.plannerMode,
-          parentTool: "maps_optimize_transit_errands",
-        }),
-      });
+      const order = candidate.order.map((choice) => ({
+        groupIndex: choice.groupIndex,
+        location: locationString(choice.candidate),
+      }));
+      try {
+        exact.push({
+          order,
+          itinerary: await itinerary.routeFixedPath({
+            locations,
+            departureTime: params.departureTime,
+            objective: params.objective,
+            dwellMinutes: candidate.order.map((choice) => params.errands[choice.groupIndex].dwell_minutes || 0),
+            transitPreference: effectiveTransitPreference,
+            plannerMode: params.plannerMode,
+            parentTool: "maps_optimize_transit_errands",
+          }),
+        });
+      } catch (error) {
+        const timingError = getTransitTimingError(error);
+        if (!timingError) throw error;
+        invalidFinalists.push({ order, timingError });
+      }
     }
     exact.sort(
       (left, right) =>
         scoreItinerary(left.itinerary, params.objective || "fastest") -
         scoreItinerary(right.itinerary, params.objective || "fastest")
     );
+    const warnings = invalidFinalists.length
+      ? [
+          `${invalidFinalists.length} exact finalist(s) were excluded because Google returned invalid chronology.`,
+          ...(exact.length ? [] : ["No transit itinerary could be ranked safely from the exact finalists."]),
+        ]
+      : [];
     return {
-      selected: exact[0],
+      selected: exact[0] || null,
       alternatives: exact.slice(1, 3),
+      invalidFinalists,
+      warnings,
       candidateCounts: trimmedGroups.map((group) => group.length),
       matrixElements: matrixEdges.length,
       guardReductions: {

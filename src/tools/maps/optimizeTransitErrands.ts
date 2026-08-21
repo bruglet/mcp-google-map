@@ -6,7 +6,7 @@ import { GroundingLiteService } from "../../services/GroundingLiteService.js";
 
 const NAME = "maps_optimize_transit_errands";
 const DESCRIPTION =
-  "Choose both the branch and visit order for several transit errands, then return the best chronological itinerary and alternatives. Use when errands may be queries such as 'an IKEA' or fixed locations; use maps_plan_transit when every stop is already known and only order may change. Candidate discovery combines bounded semantic and literal search, and exact rankings use complete arrival times including dwell; non-time objectives still use a duration-based shortlist, so they are heuristics rather than guaranteed global optima. Cost: T1 | Fan-out: L.";
+  "Choose both the branch and visit order for several transit errands, then return the best chronological itinerary and alternatives. Use when errands may be queries such as 'an IKEA' or fixed locations; use maps_plan_transit when every stop is already known and only order may change. Candidate discovery combines bounded semantic and literal search, and exact rankings use complete arrival times including dwell; valid itineraries report dwellSeconds. Non-time objectives still use a duration-based shortlist, so they are heuristics rather than guaranteed global optima. Invalid exact finalists are returned in invalidFinalists and never ranked; selected is null if every exact route is invalid. Cost: T1 | Fan-out: L.";
 const SCHEMA = {
   origin: locationInputSchema.describe("Trip starting point as a query, Place ID, coordinates, or Maps URL."),
   errands: z

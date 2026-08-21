@@ -26,8 +26,10 @@ test("ordered transit legs propagate arrival plus dwell into the next departure"
       return {
         routes: [
           {
+            duration: "600s",
             legs: [
               {
+                duration: "600s",
                 steps: [
                   {
                     travelMode: "TRANSIT",
@@ -51,7 +53,7 @@ test("ordered transit legs propagate arrival plus dwell into the next departure"
     locations: ["A", "B", "C"],
     departureTime: initial,
     dwellMinutes: [5],
-    detailLevel: "summary",
+    detailLevel: "steps",
   });
 
   assert.equal(departures.length, 2);
@@ -59,11 +61,13 @@ test("ordered transit legs propagate arrival plus dwell into the next departure"
   assert.equal(departures[1].toISOString(), "2030-01-01T10:15:00.000Z");
   assert.equal(itinerary.totalElapsedSeconds, 1500);
   assert.equal(itinerary.travelSeconds, 1200);
+  assert.equal(itinerary.dwellSeconds, 300);
+  assert.equal(itinerary.totalElapsedSeconds, itinerary.travelSeconds + itinerary.dwellSeconds);
   assert.equal(itinerary.legs[0].departureTime, "2030-01-01T10:00:00.000Z");
   assert.equal(itinerary.legs[0].arrivalTime, "2030-01-01T10:10:00.000Z");
   assert.equal(itinerary.legs[0].lastTransitArrivalTime, "2030-01-01T10:08:00.000Z");
-  assert.equal(itinerary.detailLevel, "summary");
-  assert.deepEqual(detailLevels, ["summary", "summary"]);
+  assert.equal(itinerary.detailLevel, "steps");
+  assert.deepEqual(detailLevels, ["steps", "steps"]);
   assert.equal(itinerary.legs.length, 2);
   assert.equal(itinerary.legs[0].lines[0], "M1");
   assert.match(itinerary.legs[0].googleMapsNavigationUrl, /api=1/);
@@ -73,16 +77,26 @@ test("fixed-stop optimization carries dwell with reordered stops", async () => {
   const initial = new Date("2030-01-01T10:00:00.000Z");
   const routeCalls: Array<{ origin: string; destination: string; departureTime?: Date }> = [];
   const fakeRoutes = {
-    computeRouteMatrix: async (params: { origins: string[]; destinations: string[] }) => ({
-      distances: params.origins.map(() => params.destinations.map(() => ({ value: 100, text: "100 m" }))),
-      durations: params.origins.map(() => params.destinations.map(() => ({ value: 600, text: "10 mins" }))),
-      origin_addresses: params.origins,
-      destination_addresses: params.destinations,
-    }),
+    computeRouteMatrix: async (params: { origins: string[]; destinations: string[] }) => {
+      const duration = (origin: string, destination: string) =>
+        (origin === "Home" && destination === "B") ||
+        (origin === "B" && destination === "A") ||
+        (origin === "A" && destination === "End")
+          ? 100
+          : 500;
+      return {
+        distances: params.origins.map(() => params.destinations.map(() => ({ value: 100, text: "100 m" }))),
+        durations: params.origins.map((origin) =>
+          params.destinations.map((destination) => ({ value: duration(origin, destination), text: "10 mins" }))
+        ),
+        origin_addresses: params.origins,
+        destination_addresses: params.destinations,
+      };
+    },
     computeRoutes: async (params: { origin: string; destination: string; departureTime?: Date }) => {
       routeCalls.push(params);
       return {
-        routes: [{ legs: [] }],
+        routes: [{ duration: "600s", legs: [{ duration: "600s", steps: [] }] }],
         total_duration: { value: 600, text: "10 mins" },
       };
     },
@@ -91,6 +105,7 @@ test("fixed-stop optimization carries dwell with reordered stops", async () => {
   await new TransitItineraryService(fakeRoutes).optimizeFixedStops({
     origin: "Home",
     stops: ["A", "B"],
+    finalDestination: "End",
     departureTime: initial,
     dwellMinutes: [60, 10],
     plannerMode: "conservative",
@@ -98,8 +113,10 @@ test("fixed-stop optimization carries dwell with reordered stops", async () => {
 
   const bToA = routeCalls.find((call) => call.origin === "B" && call.destination === "A");
   const aToB = routeCalls.find((call) => call.origin === "A" && call.destination === "B");
+  const aToEnd = routeCalls.find((call) => call.origin === "A" && call.destination === "End");
   assert.equal(bToA?.departureTime?.toISOString(), "2030-01-01T10:20:00.000Z");
   assert.equal(aToB?.departureTime?.toISOString(), "2030-01-01T11:10:00.000Z");
+  assert.equal(aToEnd?.departureTime?.toISOString(), "2030-01-01T11:30:00.000Z");
 });
 
 test("transit objectives infer provider preferences without overriding explicit choices", async () => {
@@ -123,7 +140,10 @@ test("transit objectives infer provider preferences without overriding explicit 
     },
     computeRoutes: async (params: { transitPreference?: unknown }) => {
       routePreferences.push(params.transitPreference);
-      return { routes: [{ legs: [] }], total_duration: { value: 600, text: "10 mins" } };
+      return {
+        routes: [{ duration: "600s", legs: [{ duration: "600s", steps: [] }] }],
+        total_duration: { value: 600, text: "10 mins" },
+      };
     },
   } as unknown as RoutesService;
 
@@ -174,7 +194,10 @@ test("errand planning trims query candidates before matrix fan-out", async () =>
     };
   };
   RoutesService.prototype.computeRoutes = async function (_params: Parameters<RoutesService["computeRoutes"]>[0]) {
-    return { routes: [{ legs: [] }], total_duration: { value: 600, text: "10 mins" } };
+    return {
+      routes: [{ duration: "600s", legs: [{ duration: "600s", steps: [] }] }],
+      total_duration: { value: 600, text: "10 mins" },
+    };
   };
   try {
     const result = await service.optimizeErrands({
@@ -392,7 +415,10 @@ test("transit place discovery combines origin-biased sources for the USC Village
       : params.destination.includes("compton")
         ? 3300
         : 3901;
-    return { routes: [{ legs: [] }], total_duration: { value: seconds, text: "" } };
+    return {
+      routes: [{ duration: `${seconds}s`, legs: [{ duration: `${seconds}s`, steps: [] }] }],
+      total_duration: { value: seconds, text: "" },
+    };
   };
   try {
     const result = await new TransitDiscoveryService("test-key").findPlacesByTransit({
@@ -478,7 +504,10 @@ test("Grounding-only transit finalists are hydrated without enriching rejected c
     };
   };
   RoutesService.prototype.computeRoutes = async function () {
-    return { routes: [{ legs: [] }], total_duration: { value: 1800, text: "30 mins" } };
+    return {
+      routes: [{ duration: "1800s", legs: [{ duration: "1800s", steps: [] }] }],
+      total_duration: { value: 1800, text: "30 mins" },
+    };
   };
   try {
     const result = await new TransitDiscoveryService("test-key").findPlacesByTransit({
@@ -503,50 +532,323 @@ test("Grounding-only transit finalists are hydrated without enriching rejected c
   }
 });
 
-test("complete transit route duration includes waiting and final walking", async () => {
+test("place discovery reports invalid exact finalists without ranking them", async () => {
+  const originalGeocode = GoogleMapsTools.prototype.geocode;
+  const originalGroundingSearch = GroundingLiteService.prototype.searchPlaces;
+  const originalPlacesSearch = NewPlacesService.prototype.searchText;
+  const originalMatrix = RoutesService.prototype.computeRouteMatrix;
+  const originalRoutes = RoutesService.prototype.computeRoutes;
+  GoogleMapsTools.prototype.geocode = async function () {
+    return { location: { lat: 34.023, lng: -118.286 }, formatted_address: "USC Village", place_id: "origin" };
+  };
+  GroundingLiteService.prototype.searchPlaces = async function () {
+    return {};
+  };
+  NewPlacesService.prototype.searchText = async function () {
+    return [
+      {
+        name: "Walmart Supercenter",
+        place_id: "walmart-torrance",
+        formatted_address: "19503 Normandie Ave, Torrance, CA 90501",
+        geometry: { location: { lat: 33.83, lng: -118.29 } },
+      },
+    ];
+  };
+  RoutesService.prototype.computeRouteMatrix = async function (params) {
+    return {
+      distances: params.origins.map(() => params.destinations.map(() => ({ value: 1, text: "1 m" }))),
+      durations: params.origins.map(() => params.destinations.map(() => ({ value: 3000, text: "50 mins" }))),
+      origin_addresses: params.origins,
+      destination_addresses: params.destinations,
+    };
+  };
+  RoutesService.prototype.computeRoutes = async function () {
+    return {
+      routes: [
+        {
+          duration: "600s",
+          legs: [
+            {
+              duration: "600s",
+              steps: [
+                {
+                  travelMode: "TRANSIT",
+                  transitDetails: {
+                    stopDetails: {
+                      departureTime: "2030-01-01T10:05:00.000Z",
+                      arrivalTime: "2030-01-01T10:11:00.000Z",
+                    },
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      total_duration: { value: 600, text: "10 mins" },
+    };
+  };
+  try {
+    const result = await new TransitDiscoveryService("test-key").findPlacesByTransit({
+      origin: "USC Village, Los Angeles, CA",
+      query: "Walmart stores near Los Angeles",
+      departureTime: new Date("2030-01-01T10:00:00.000Z"),
+      maxMinutes: 60,
+      plannerMode: "conservative",
+    });
+    assert.deepEqual(result.candidates, []);
+    assert.equal(result.invalidFinalists.length, 1);
+    assert.equal(result.invalidFinalists[0].name, "Walmart Supercenter");
+    assert.equal(result.invalidFinalists[0].placeId, "walmart-torrance");
+    assert.equal(result.invalidFinalists[0].coarseDurationSeconds, 3000);
+    assert.equal(result.invalidFinalists[0].timingError.code, "TRANSIT_CHRONOLOGY_INVALID");
+    assert.match(result.warnings.join(" "), /not verified against max_minutes/);
+  } finally {
+    GoogleMapsTools.prototype.geocode = originalGeocode;
+    GroundingLiteService.prototype.searchPlaces = originalGroundingSearch;
+    NewPlacesService.prototype.searchText = originalPlacesSearch;
+    RoutesService.prototype.computeRouteMatrix = originalMatrix;
+    RoutesService.prototype.computeRoutes = originalRoutes;
+  }
+});
+
+test("fixed-stop and errand optimizers exclude invalid exact finalists", async () => {
+  const initial = new Date("2030-01-01T10:00:00.000Z");
+  const invalidRoute = {
+    routes: [
+      {
+        duration: "600s",
+        legs: [
+          {
+            duration: "600s",
+            steps: [
+              {
+                travelMode: "TRANSIT",
+                transitDetails: {
+                  stopDetails: {
+                    departureTime: "2030-01-01T10:05:00.000Z",
+                    arrivalTime: "2030-01-01T10:11:00.000Z",
+                  },
+                },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+    total_duration: { value: 600, text: "10 mins" },
+  };
+  const fakeRoutes = {
+    computeRouteMatrix: async (params: { origins: string[]; destinations: string[] }) => ({
+      distances: params.origins.map(() => params.destinations.map(() => ({ value: 1, text: "1 m" }))),
+      durations: params.origins.map(() => params.destinations.map(() => ({ value: 600, text: "10 mins" }))),
+      origin_addresses: params.origins,
+      destination_addresses: params.destinations,
+    }),
+    computeRoutes: async () => invalidRoute,
+  } as unknown as RoutesService;
+
+  const fixedStopResult = await new TransitItineraryService(fakeRoutes).optimizeFixedStops({
+    origin: "Home",
+    stops: ["A"],
+    departureTime: initial,
+    plannerMode: "conservative",
+  });
+  assert.equal(fixedStopResult.best, null);
+  assert.equal(fixedStopResult.alternatives.length, 0);
+  assert.equal(fixedStopResult.invalidFinalists.length, 1);
+  assert.match(fixedStopResult.warnings.join(" "), /ranked safely/);
+
+  const originalMatrix = RoutesService.prototype.computeRouteMatrix;
+  const originalRoutes = RoutesService.prototype.computeRoutes;
+  RoutesService.prototype.computeRouteMatrix = async function (params) {
+    return {
+      distances: params.origins.map(() => params.destinations.map(() => ({ value: 1, text: "1 m" }))),
+      durations: params.origins.map(() => params.destinations.map(() => ({ value: 600, text: "10 mins" }))),
+      origin_addresses: params.origins,
+      destination_addresses: params.destinations,
+    };
+  };
+  RoutesService.prototype.computeRoutes = async function () {
+    return invalidRoute;
+  };
+  try {
+    const service = new TransitDiscoveryService("test-key");
+    (service as unknown as { discover: () => Promise<Array<{ name: string; address: string }>> }).discover =
+      async () => [{ name: "IKEA Burbank", address: "IKEA Burbank" }];
+    const errandResult = await service.optimizeErrands({
+      origin: "Home",
+      errands: [{ query: "IKEA" }],
+      departureTime: initial,
+      plannerMode: "conservative",
+    });
+    assert.equal(errandResult.selected, null);
+    assert.equal(errandResult.alternatives.length, 0);
+    assert.equal(errandResult.invalidFinalists.length, 1);
+    assert.equal(errandResult.invalidFinalists[0].timingError.code, "TRANSIT_CHRONOLOGY_INVALID");
+    assert.match(errandResult.warnings.join(" "), /ranked safely/);
+  } finally {
+    RoutesService.prototype.computeRouteMatrix = originalMatrix;
+    RoutesService.prototype.computeRoutes = originalRoutes;
+  }
+});
+
+test("raw route chronology includes initial waiting and final walking", async () => {
   const initial = new Date("2030-01-01T10:00:00.000Z");
   const fakeRoutes = {
     computeRoutes: async () => ({
       routes: [
         {
+          duration: "3846s",
           legs: [
-            { steps: [{ travelMode: "WALK", staticDuration: "300s" }] },
             {
+              duration: "3846s",
               steps: [
+                { travelMode: "WALK", staticDuration: "600s" },
                 {
                   travelMode: "TRANSIT",
-                  staticDuration: "1800s",
+                  staticDuration: "1200s",
                   transitDetails: {
                     stopDetails: {
-                      departureTime: "2030-01-01T10:10:00.000Z",
+                      departureTime: "2030-01-01T10:20:00.000Z",
                       arrivalTime: "2030-01-01T10:40:00.000Z",
                     },
                     transitLine: { shortName: "M1" },
                   },
                 },
+                { travelMode: "WALK", staticDuration: "300s" },
+                {
+                  travelMode: "TRANSIT",
+                  staticDuration: "600s",
+                  transitDetails: {
+                    stopDetails: {
+                      departureTime: "2030-01-01T10:50:00.000Z",
+                      arrivalTime: "2030-01-01T11:00:00.000Z",
+                    },
+                    transitLine: { shortName: "M2" },
+                  },
+                },
+                { travelMode: "WALK", staticDuration: "100s" },
               ],
             },
-            { steps: [{ travelMode: "WALK", staticDuration: "200s" }] },
           ],
         },
       ],
-      total_duration: { value: 3000, text: "50 mins" },
+      total_duration: { value: 2973, text: "49 mins" },
+    }),
+  } as unknown as RoutesService;
+
+  const itinerary = await new TransitItineraryService(fakeRoutes).routeFixedPath({
+    locations: ["USC Village, Los Angeles, CA", "19503 Normandie Ave, Torrance, CA 90501"],
+    departureTime: initial,
+  });
+  const leg = itinerary.legs[0];
+  assert.equal(leg.departureTime, "2030-01-01T10:00:00.000Z");
+  assert.equal(leg.arrivalTime, "2030-01-01T11:04:06.000Z");
+  assert.equal(leg.firstTransitDepartureTime, "2030-01-01T10:20:00.000Z");
+  assert.equal(leg.lastTransitArrivalTime, "2030-01-01T11:00:00.000Z");
+  assert.equal(leg.walkingSeconds, 1000);
+  assert.equal(leg.transitSeconds, 1800);
+  assert.equal(leg.waitingSeconds, 1046);
+  assert.equal(itinerary.totalElapsedSeconds, 3846);
+  assert.equal(itinerary.travelSeconds, 3846);
+  assert.equal(itinerary.travelSeconds, itinerary.totalElapsedSeconds);
+  assert.equal(itinerary.dwellSeconds, 0);
+  assert.equal(leg.durationSeconds, (Date.parse(leg.arrivalTime) - Date.parse(leg.departureTime)) / 1000);
+  assert.ok(Date.parse(leg.departureTime) <= Date.parse(leg.firstTransitDepartureTime!));
+  assert.ok(Date.parse(leg.firstTransitDepartureTime!) <= Date.parse(leg.lastTransitArrivalTime!));
+  assert.ok(Date.parse(leg.lastTransitArrivalTime!) < Date.parse(leg.arrivalTime));
+  assert.equal(leg.walkingSeconds! + leg.transitSeconds! + leg.waitingSeconds!, leg.durationSeconds);
+  assert.match(itinerary.warnings.join(" "), /validated raw duration was used/);
+});
+
+test("invalid transit chronology never produces an itinerary", async () => {
+  const initial = new Date("2030-01-01T10:00:00.000Z");
+  const transitStep = (departureTime: string, arrivalTime: string) => ({
+    travelMode: "TRANSIT",
+    transitDetails: { stopDetails: { departureTime, arrivalTime } },
+  });
+  const cases = [
+    {
+      name: "route ends before a transit event",
+      route: {
+        duration: "600s",
+        legs: [
+          {
+            duration: "600s",
+            steps: [transitStep("2030-01-01T10:05:00.000Z", "2030-01-01T10:11:00.000Z")],
+          },
+        ],
+      },
+    },
+    {
+      name: "transit timestamps are reversed",
+      route: {
+        duration: "600s",
+        legs: [
+          {
+            duration: "600s",
+            steps: [transitStep("2030-01-01T10:05:00.000Z", "2030-01-01T10:04:00.000Z")],
+          },
+        ],
+      },
+    },
+    {
+      name: "route and leg durations disagree",
+      route: { duration: "600s", legs: [{ duration: "602s", steps: [] }] },
+    },
+    {
+      name: "transit timestamps are missing",
+      route: { duration: "600s", legs: [{ duration: "600s", steps: [{ travelMode: "TRANSIT" }] }] },
+    },
+    {
+      name: "walking steps overrun the route",
+      route: {
+        duration: "600s",
+        legs: [{ duration: "600s", steps: [{ travelMode: "WALK", staticDuration: "601s" }] }],
+      },
+    },
+  ];
+
+  for (const testCase of cases) {
+    const fakeRoutes = {
+      computeRoutes: async () => ({ routes: [testCase.route], total_duration: { value: 600, text: "10 mins" } }),
+    } as unknown as RoutesService;
+    await assert.rejects(
+      () =>
+        new TransitItineraryService(fakeRoutes).routeFixedPath({
+          locations: ["A", "B"],
+          departureTime: initial,
+          detailLevel: "steps",
+        }),
+      (error: unknown) => error instanceof Error && error.message.startsWith("TRANSIT_CHRONOLOGY_INVALID:"),
+      testCase.name
+    );
+  }
+});
+
+test("summary transit detail preserves complete timing without unvalidated categories", async () => {
+  const initial = new Date("2030-01-01T10:00:00.000Z");
+  const fakeRoutes = {
+    computeRoutes: async () => ({
+      routes: [{ duration: "600s", legs: [{ duration: "600s" }] }],
+      total_duration: { value: 600, text: "10 mins" },
     }),
   } as unknown as RoutesService;
 
   const itinerary = await new TransitItineraryService(fakeRoutes).routeFixedPath({
     locations: ["A", "B"],
     departureTime: initial,
+    detailLevel: "summary",
   });
   const leg = itinerary.legs[0];
-  assert.equal(leg.departureTime, "2030-01-01T10:00:00.000Z");
-  assert.equal(leg.arrivalTime, "2030-01-01T10:50:00.000Z");
-  assert.equal(leg.firstTransitDepartureTime, "2030-01-01T10:10:00.000Z");
-  assert.equal(leg.lastTransitArrivalTime, "2030-01-01T10:40:00.000Z");
-  assert.equal(leg.walkingSeconds, 500);
-  assert.equal(leg.transitSeconds, 1800);
-  assert.equal(leg.waitingSeconds, 700);
-  assert.equal(itinerary.totalElapsedSeconds, 3000);
-  assert.equal(itinerary.travelSeconds, 3000);
-  assert.equal(itinerary.travelSeconds, itinerary.totalElapsedSeconds);
+  assert.equal(leg.durationSeconds, 600);
+  assert.equal(leg.arrivalTime, "2030-01-01T10:10:00.000Z");
+  assert.equal(leg.walkingSeconds, undefined);
+  assert.equal(leg.transitSeconds, undefined);
+  assert.equal(leg.waitingSeconds, undefined);
+  assert.equal(leg.firstTransitDepartureTime, undefined);
+  assert.equal(leg.lastTransitArrivalTime, undefined);
+  assert.equal(itinerary.totalElapsedSeconds, 600);
+  assert.equal(itinerary.dwellSeconds, 0);
 });
