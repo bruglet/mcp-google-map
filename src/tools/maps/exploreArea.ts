@@ -4,24 +4,26 @@ import { getCurrentApiKey } from "../../utils/requestContext.js";
 
 const NAME = "maps_explore_area";
 const DESCRIPTION =
-  "Explore nearby categories in one call. Candidate search is bounded per category and detail enrichment is opt-in; enrich_top_n defaults to 0 and has no effect without explicit include groups. Use planner_mode=thorough for a broader bounded search. Use for a neighborhood overview, not generic reviews/photos. Cost: T1-T4 | Fan-out: M.";
+  "Return bounded nearby candidates across several place categories for a neighborhood overview. Use when the user wants to explore what is around an area; use maps_search_nearby for one category and maps_compare_places for a focused side-by-side comparison. Enrichment is opt-in and can be high-tier; enrich_top_n defaults to 0 and does nothing without include groups. Cost: T1-T4 | Fan-out: M.";
 
 const SCHEMA = {
-  location: z.string().describe("Address or landmark to explore around"),
+  location: z
+    .string()
+    .describe("Address, landmark, or coordinates at the center of the area; pass known values directly."),
   types: z
     .array(z.string())
     .optional()
     .describe(
-      "Place types to search (default: restaurant, cafe, tourist_attraction). Must be Places API (New) type names. Examples: hotel, bar, park, museum"
+      "Places API type names to explore, such as hotel, bar, park, or museum; defaults to restaurant, cafe, and tourist_attraction."
     ),
-  radius: z.number().optional().describe("Search radius in meters (default: 1000)"),
+  radius: z.number().optional().describe("Search radius in meters; defaults to 1000."),
   enrich_top_n: z
     .number()
     .int()
     .min(0)
     .max(10)
     .default(0)
-    .describe("Number of top results per type to enrich; default 0"),
+    .describe("Number of top candidates per type to enrich; defaults to 0 and requires include groups."),
   include: z
     .array(
       z.enum([
@@ -37,8 +39,15 @@ const SCHEMA = {
       ])
     )
     .optional()
-    .describe("Optional detail groups for enriched candidates"),
-  planner_mode: z.enum(["conservative", "thorough"]).default("conservative"),
+    .describe(
+      "Detail groups for enriched finalists only; omit to keep all candidates minimal. Reviews, parking, amenities, and AI summaries are highest-tier."
+    ),
+  planner_mode: z
+    .enum(["conservative", "thorough"])
+    .default("conservative")
+    .describe(
+      "Use conservative by default; choose thorough only when the request clearly needs broader bounded exploration."
+    ),
 };
 
 export type ExploreAreaParams = z.infer<z.ZodObject<typeof SCHEMA>>;

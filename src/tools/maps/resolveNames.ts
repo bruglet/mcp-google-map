@@ -4,14 +4,20 @@ import { getCurrentApiKey } from "../../utils/requestContext.js";
 
 const NAME = "maps_resolve_names";
 const DESCRIPTION =
-  "Resolve up to 20 specific place names or addresses to canonical Google Maps Place IDs through Grounding Lite. Do not use for broad category searches. Cost: T1 | Fan-out: S.";
+  "Resolve up to 20 specific place names or addresses to canonical Google Maps identities while preserving input correspondence and mixed failures. Use when later work needs Place IDs for known names; use maps_grounded_search for discovery and pass precise addresses directly to routing when canonical identity is unnecessary. Cost: T1 | Fan-out: S.";
 const SCHEMA = {
   queries: z
     .array(z.object({ text: z.string() }))
     .min(1)
     .max(20)
-    .describe("Specific names or addresses to resolve"),
-  region_code: z.string().length(2).optional().describe("Optional two-letter region code"),
+    .describe(
+      "Known place names or addresses to resolve in one batch; each item must contain a text field and results follow input order."
+    ),
+  region_code: z
+    .string()
+    .length(2)
+    .optional()
+    .describe("Optional two-letter country or region code used to disambiguate all queries, such as US or JP."),
 };
 export type ResolveNamesParams = z.infer<z.ZodObject<typeof SCHEMA>>;
 

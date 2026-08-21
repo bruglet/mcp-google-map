@@ -4,13 +4,24 @@ import { LocationInput, locationInputSchema } from "../../services/location.js";
 
 const NAME = "maps_create_url";
 const DESCRIPTION =
-  "Create a Google Maps place, directions, or navigation URL locally. This is T0 and makes no Google API request. Use Place IDs when available; transit itineraries should return one link per leg.";
+  "Create a Google Maps place, directions, or immediate-navigation URL without calling a Google API. Use when the user wants a shareable or handoff link; use routing tools first when route duration, steps, optimization, or transit planning is needed. Prefer a known Place ID, omit origin to use the device's current location, and create one URL per transit leg. Cost: T0 | Fan-out: S.";
 
 const SCHEMA = {
-  action: z.enum(["place", "directions", "navigate"]).describe("URL operation"),
-  destination: locationInputSchema.describe("Destination query, Place ID, coordinates, or Maps URL"),
-  origin: locationInputSchema.optional().describe("Optional known origin; omit to use the device location"),
-  mode: z.enum(["driving", "walking", "bicycling", "transit"]).default("driving").describe("Google Maps travel mode"),
+  action: z
+    .enum(["place", "directions", "navigate"])
+    .describe(
+      "Use place for a location link, directions for a route preview, or navigate to request immediate navigation."
+    ),
+  destination: locationInputSchema.describe(
+    "Destination as a query, Place ID, coordinates, or Maps URL; prefer a Place ID returned by another tool."
+  ),
+  origin: locationInputSchema
+    .optional()
+    .describe("Known route origin; omit for current-device navigation or a place-only link."),
+  mode: z
+    .enum(["driving", "walking", "bicycling", "transit"])
+    .default("driving")
+    .describe("Travel mode for directions or navigation URLs; defaults to driving and is ignored for place links."),
 };
 
 export type CreateUrlParams = z.infer<z.ZodObject<typeof SCHEMA>>;

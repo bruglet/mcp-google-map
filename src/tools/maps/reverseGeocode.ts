@@ -4,11 +4,11 @@ import { getCurrentApiKey } from "../../utils/requestContext.js";
 
 const NAME = "maps_reverse_geocode";
 const DESCRIPTION =
-  "Convert GPS coordinates (latitude/longitude) into a human-readable street address. Use when you have coordinates from another tool's output or a user's shared location and need the actual address.";
+  "Convert coordinates into a human-readable address and address components. Use when the user shared coordinates or another tool returned them and the address itself is needed; do not use merely to pass known coordinates to routing or nearby search.";
 
 const SCHEMA = {
-  latitude: z.number().describe("Latitude coordinate"),
-  longitude: z.number().describe("Longitude coordinate"),
+  latitude: z.number().describe("Latitude in decimal degrees, normally supplied by the user or another Maps tool."),
+  longitude: z.number().describe("Longitude in decimal degrees, normally supplied by the user or another Maps tool."),
 };
 
 export type ReverseGeocodeParams = z.infer<z.ZodObject<typeof SCHEMA>>;

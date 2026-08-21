@@ -4,31 +4,46 @@ import { getCurrentApiKey } from "../../utils/requestContext.js";
 
 const NAME = "maps_directions";
 const DESCRIPTION =
-  "Get directions between two points. Defaults to a compact summary; request steps when the user needs turn-by-turn or transit line details, and geometry only when a polyline is required. Driving traffic defaults to none; traffic-aware/optimal promotes the request to Routes Pro. Cost: T1-T2 | Fan-out: S.";
+  "Return a route between one origin and destination, including distance and duration, with optional steps, transit details, or geometry. Use for a specific A-to-B route; use maps_distance_matrix to compare many pairs, maps_plan_route for non-transit multi-stop routing, or maps_transit_itinerary for an ordered multi-leg transit trip. Summary is the default, and traffic-aware driving is higher-tier. Cost: T1-T2 | Fan-out: S.";
 
 const SCHEMA = {
-  origin: z.string().describe("Starting point address or coordinates"),
-  destination: z.string().describe("Destination address or coordinates"),
+  origin: z.string().describe("Starting address, Place ID, or latitude,longitude; pass a known value directly."),
+  destination: z
+    .string()
+    .describe("Destination address, Place ID, or latitude,longitude; pass a known value directly."),
   mode: z
     .enum(["driving", "walking", "bicycling", "transit"])
     .default("driving")
-    .describe("Travel mode for directions"),
-  departure_time: z.string().optional().describe("Departure time (ISO string format)"),
-  arrival_time: z.string().optional().describe("Arrival time (ISO string format)"),
-  alternatives: z.boolean().optional().describe("Request alternate routes. Defaults false."),
+    .describe("Travel mode; defaults to driving."),
+  departure_time: z.string().optional().describe("ISO 8601 departure time; mutually exclusive with arrival_time."),
+  arrival_time: z
+    .string()
+    .optional()
+    .describe("ISO 8601 desired arrival time; mutually exclusive with departure_time."),
+  alternatives: z
+    .boolean()
+    .optional()
+    .describe("Set true only when the user wants alternate routes; defaults to false."),
   detail_level: z
     .enum(["summary", "steps", "geometry", "full"])
     .default("summary")
-    .describe("Response detail. Summary is smallest; geometry/full add encoded polylines."),
+    .describe(
+      "Use summary for time/distance, steps for instructions or transit lines, geometry for a polyline, and full only when both are needed."
+    ),
   traffic: z
     .enum(["none", "aware", "optimal"])
     .default("none")
-    .describe("Driving traffic policy. none is cheapest/default; aware and optimal use traffic-aware routing."),
+    .describe(
+      "Driving-only traffic policy. none is the default; aware and optimal use higher-tier traffic-aware routing."
+    ),
   transit_modes: z
     .array(z.enum(["bus", "subway", "train", "light_rail", "rail"]))
     .optional()
-    .describe("Optional preferred transit modes."),
-  transit_preference: z.enum(["less_walking", "fewer_transfers"]).optional().describe("Optional transit preference."),
+    .describe("Transit modes to prefer when mode is transit; omit to allow all supported modes."),
+  transit_preference: z
+    .enum(["less_walking", "fewer_transfers"])
+    .optional()
+    .describe("Transit-only preference; omit when fastest overall travel is more important."),
   avoid_tolls: z
     .boolean()
     .optional()

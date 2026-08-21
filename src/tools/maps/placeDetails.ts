@@ -5,10 +5,12 @@ import { PlaceFieldGroup } from "../../services/costPolicy.js";
 
 const NAME = "maps_place_details";
 const DESCRIPTION =
-  "Get details for a known Google Place ID. Defaults to identity, address, coordinates, type, and a local Google Maps URL. Optional contact, hours, ratings, price, reviews, accessibility, amenities, parking, or AI summary groups increase the Places billing tier; request only what the user needs. Cost: T1-T4 | Fan-out: S.";
+  "Get requested details for one known Google Place ID, returning basic identity, address, coordinates, type, and a Maps URL by default. Use after a search or resolver provides a Place ID; do not use it to discover candidates. Optional contact, hours, ratings, price, reviews, accessibility, amenities, parking, and AI summaries increase the billing tier, so request only data needed for the answer. Cost: T1-T4 | Fan-out: S.";
 
 const SCHEMA = {
-  placeId: z.string().describe("Google Maps place ID"),
+  placeId: z
+    .string()
+    .describe("Google Place ID normally returned by a search tool, maps_resolve_names, or maps_resolve_maps_urls."),
   include: z
     .array(
       z.enum([
@@ -25,7 +27,7 @@ const SCHEMA = {
     )
     .optional()
     .describe(
-      "Optional semantic enrichment groups. Defaults to none; reviews, parking, amenities, and summaries are highest-tier data."
+      "Detail groups to return in the same request. Omit for basic identity/location; reviews, parking, amenities, and AI summaries are highest-tier data."
     ),
 };
 

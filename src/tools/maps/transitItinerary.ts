@@ -7,19 +7,40 @@ import { GroundingLiteService } from "../../services/GroundingLiteService.js";
 
 const NAME = "maps_transit_itinerary";
 const DESCRIPTION =
-  "Route an explicitly ordered transit path such as A → station B → destination C. Google transit does not support intermediate waypoints, so this chains time-aware legs and propagates each arrival time. The conservative planner allows up to 8 intermediate stops; use planner_mode=thorough for up to 16. Cost: T1 | Fan-out: M.";
+  "Return a chronological transit itinerary for locations that must be visited in the supplied order, including per-leg timing, lines, stops, transfers, metrics, and a Maps URL for each leg. Use for an ordered A-to-B-to-C trip; use maps_plan_transit when stop order may change or maps_directions for one transit leg. Each leg departs after the prior arrival plus dwell time because Google transit does not support intermediate waypoints. Cost: T1 | Fan-out: M.";
 const SCHEMA = {
   locations: z
     .array(locationInputSchema)
     .min(2)
     .max(18)
-    .describe("Ordered query, Place ID, coordinates, or Maps URL locations"),
-  departure_time: z.string().optional().describe("ISO departure time; defaults to now"),
-  dwell_minutes: z.array(z.number().int().min(0)).optional().describe("Dwell after each non-final location"),
-  detail_level: z.enum(["summary", "steps", "geometry", "full"]).default("steps"),
-  transit_modes: z.array(z.enum(["bus", "subway", "train", "light_rail", "rail"])).optional(),
-  transit_preference: z.enum(["less_walking", "fewer_transfers"]).optional(),
-  planner_mode: z.enum(["conservative", "thorough"]).default("conservative"),
+    .describe("Locations in required visit order, each as a query, Place ID, coordinates, or Maps URL; minimum 2."),
+  departure_time: z.string().optional().describe("ISO 8601 departure time for the first leg; defaults to now."),
+  dwell_minutes: z
+    .array(z.number().int().min(0))
+    .optional()
+    .describe(
+      "Minutes spent after each non-final location, aligned with locations except the final destination; omitted entries are zero."
+    ),
+  detail_level: z
+    .enum(["summary", "steps", "geometry", "full"])
+    .default("steps")
+    .describe(
+      "Use summary for timing only, steps for lines and transfers, geometry for polylines, or full when both are needed; defaults to steps."
+    ),
+  transit_modes: z
+    .array(z.enum(["bus", "subway", "train", "light_rail", "rail"]))
+    .optional()
+    .describe("Transit modes to prefer; omit to allow all supported modes."),
+  transit_preference: z
+    .enum(["less_walking", "fewer_transfers"])
+    .optional()
+    .describe("Optional trip-wide preference; omit when fastest overall travel is more important."),
+  planner_mode: z
+    .enum(["conservative", "thorough"])
+    .default("conservative")
+    .describe(
+      "Use conservative for up to 8 intermediate stops; choose thorough only when the request requires up to 16."
+    ),
 };
 export type TransitItineraryParams = z.infer<z.ZodObject<typeof SCHEMA>>;
 

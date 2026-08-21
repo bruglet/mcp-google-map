@@ -4,17 +4,21 @@ import { getCurrentApiKey } from "../../utils/requestContext.js";
 
 const NAME = "maps_search_along_route";
 const DESCRIPTION =
-  "Search for places along a route. A route geometry is requested internally because the Places search needs it, while candidate fields remain minimal. Use for family drives, meals, fuel, and stops that should be on the way. Cost: T2 | Fan-out: M.";
+  "Return minimal place candidates located along one route between an origin and destination. Use when the user wants food, fuel, or another stop that is on the way; use maps_search_nearby for places around one point and maps_plan_route when the stops are already known. Route geometry is required for this search, but ratings, hours, and reviews are not fetched. Cost: T2 | Fan-out: M.";
 
 const SCHEMA = {
-  textQuery: z.string().describe("What to search for along the route (e.g. 'restaurant', 'coffee shop', 'temple')"),
-  origin: z.string().describe("Route start point — address or landmark name"),
-  destination: z.string().describe("Route end point — address or landmark name"),
+  textQuery: z
+    .string()
+    .describe("Place category or query to find along the route, such as restaurant, coffee shop, or gas station."),
+  origin: z.string().describe("Route-start address, Place ID, landmark, or coordinates; pass a known value directly."),
+  destination: z
+    .string()
+    .describe("Route-end address, Place ID, landmark, or coordinates; pass a known value directly."),
   mode: z
     .enum(["driving", "walking", "bicycling", "transit"])
     .optional()
-    .describe("Travel mode for the route (default: walking)"),
-  maxResults: z.number().optional().describe("Max results to return (default: 5, max: 20)"),
+    .describe("Travel mode used to establish the route corridor; defaults to walking."),
+  maxResults: z.number().optional().describe("Maximum candidates to return; defaults to 5 and cannot exceed 20."),
 };
 
 export type SearchAlongRouteParams = z.infer<z.ZodObject<typeof SCHEMA>>;

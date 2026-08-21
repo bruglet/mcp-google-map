@@ -4,10 +4,14 @@ import { getCurrentApiKey } from "../../utils/requestContext.js";
 
 const NAME = "maps_batch_geocode";
 const DESCRIPTION =
-  "Geocode up to 50 addresses in one bounded operation. Each address still consumes one Geocoding API request; this tool preserves per-address failures and accounts the fan-out. Use when the user provides a list of addresses and needs all their coordinates. For more than 50, use the CLI batch-geocode command instead.";
+  "Convert up to 50 addresses or landmark names to coordinates while preserving input order and per-item failures. Use when the user needs coordinates for a list; use maps_geocode for one location, and do not geocode values merely to pass them to routes that already accept addresses. Each item consumes a separate Geocoding request. Cost: T1 | Fan-out: M/L.";
 
 const SCHEMA = {
-  addresses: z.array(z.string()).min(1).max(50).describe("List of addresses or landmark names to geocode (max 50)"),
+  addresses: z
+    .array(z.string())
+    .min(1)
+    .max(50)
+    .describe("Addresses or landmark names to convert, in the order results should be returned; maximum 50."),
 };
 
 export type BatchGeocodeParams = z.infer<z.ZodObject<typeof SCHEMA>>;

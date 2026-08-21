@@ -4,15 +4,21 @@ import { getCurrentApiKey } from "../../utils/requestContext.js";
 
 const NAME = "maps_distance_matrix";
 const DESCRIPTION =
-  "Calculate distances and durations between multiple origins and destinations. Matrix usage is billed per origin×destination element, not per HTTP request; this direct tool is locally limited to 100 elements, and composite planners may split up to their explicit planner-mode allowance. Cost: T1-T2 | Fan-out: M/L.";
+  "Return distance, duration, and availability for every origin-destination pair. Use to compare many route pairs or shortlist candidates; use maps_directions for one detailed route and the transit planners for stop ordering. Usage is billed per origins x destinations element, and this direct tool is limited to 100 elements. Cost: T1-T2 | Fan-out: M/L.";
 
 const SCHEMA = {
-  origins: z.array(z.string()).describe("List of origin addresses or coordinates"),
-  destinations: z.array(z.string()).describe("List of destination addresses or coordinates"),
+  origins: z
+    .array(z.string())
+    .describe("Origin addresses, Place IDs, or latitude,longitude strings; pass known values directly."),
+  destinations: z
+    .array(z.string())
+    .describe(
+      "Destination addresses, Place IDs, or latitude,longitude strings; every origin is paired with every destination."
+    ),
   mode: z
     .enum(["driving", "walking", "bicycling", "transit"])
     .default("driving")
-    .describe("Travel mode for calculation"),
+    .describe("Travel mode for all matrix pairs; defaults to driving."),
   departure_time: z
     .string()
     .optional()
@@ -30,12 +36,17 @@ const SCHEMA = {
   traffic: z
     .enum(["none", "aware", "optimal"])
     .default("none")
-    .describe("Driving traffic policy. Defaults to no live traffic."),
+    .describe(
+      "Driving-only traffic policy. none is the default; aware and optimal use higher-tier traffic-aware routing."
+    ),
   transit_modes: z
     .array(z.enum(["bus", "subway", "train", "light_rail", "rail"]))
     .optional()
-    .describe("Optional preferred transit modes."),
-  transit_preference: z.enum(["less_walking", "fewer_transfers"]).optional().describe("Optional transit preference."),
+    .describe("Transit modes to prefer when mode is transit; omit to allow all supported modes."),
+  transit_preference: z
+    .enum(["less_walking", "fewer_transfers"])
+    .optional()
+    .describe("Transit-only preference; omit when fastest overall travel is more important."),
 };
 
 export type DistanceMatrixParams = z.infer<z.ZodObject<typeof SCHEMA>>;

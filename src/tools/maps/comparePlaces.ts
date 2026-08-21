@@ -4,22 +4,28 @@ import { getCurrentApiKey } from "../../utils/requestContext.js";
 
 const NAME = "maps_compare_places";
 const DESCRIPTION =
-  "Compare bounded candidate places side-by-side. Search and basic identity are returned by default; optional enrichment and route-matrix comparison are explicit. Travel mode is configurable and defaults to transit when a user location is supplied. planner_mode controls the candidate and high-tier enrichment caps. Cost: T1-T4 | Fan-out: M.";
+  "Search for a bounded set of places and compare their basic data side by side, optionally adding travel times from one user location or selected detail groups. Use when the user is choosing among alternatives; use maps_search_places for discovery without comparison and maps_place_details for one already-known Place ID. Route comparison requires userLocation, and enrichment is opt-in and may be high-tier. Cost: T1-T4 | Fan-out: M.";
 
 const SCHEMA = {
-  query: z.string().describe("Search query (e.g., 'ramen near Shibuya', 'hotels in Taipei')"),
+  query: z.string().describe("Focused comparison query including category and area, such as 'ramen near Shibuya'."),
   userLocation: z
     .object({
-      latitude: z.number().describe("Your latitude"),
-      longitude: z.number().describe("Your longitude"),
+      latitude: z.number().describe("User-origin latitude in decimal degrees."),
+      longitude: z.number().describe("User-origin longitude in decimal degrees."),
     })
     .optional()
-    .describe("Your current location — if provided, adds distance and drive time to each result"),
-  limit: z.number().int().min(1).max(10).optional().describe("Max places to compare (default: 5; planner-capped)"),
+    .describe("Optional route-comparison origin; when supplied, adds distance and travel time to each result."),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(10)
+    .optional()
+    .describe("Maximum candidates to compare; defaults to 5 and is planner-capped."),
   mode: z
     .enum(["driving", "walking", "bicycling", "transit"])
     .default("transit")
-    .describe("Optional comparison travel mode"),
+    .describe("Travel mode for route comparisons from userLocation; defaults to transit."),
   include: z
     .array(
       z.enum([
@@ -35,8 +41,15 @@ const SCHEMA = {
       ])
     )
     .optional()
-    .describe("Optional Place Details groups"),
-  planner_mode: z.enum(["conservative", "thorough"]).default("conservative"),
+    .describe(
+      "Place Details groups to add for candidates. Omit for a minimal comparison; reviews, parking, amenities, and AI summaries are highest-tier."
+    ),
+  planner_mode: z
+    .enum(["conservative", "thorough"])
+    .default("conservative")
+    .describe(
+      "Use conservative by default; choose thorough only when the request needs more candidates or enrichments."
+    ),
 };
 
 export type ComparePlacesParams = z.infer<z.ZodObject<typeof SCHEMA>>;
