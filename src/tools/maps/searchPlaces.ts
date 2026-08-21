@@ -4,21 +4,25 @@ import { getCurrentApiKey } from "../../utils/requestContext.js";
 
 const NAME = "maps_search_places";
 const DESCRIPTION =
-  "Search for candidate places using a free-text query. Results default to identity, address, coordinates, type, Place ID, and a local Maps URL; ratings, hours, price, contact, reviews, and photos are not fetched as generic enrichment. Cost: T2 | Fan-out: S.";
+  "Search for candidate places from a descriptive text query and return minimal identity, address, coordinates, type, Place ID, and Maps URL data. Use for requests such as 'Italian restaurants in Manhattan'; use maps_search_nearby for a specific type within a radius and maps_grounded_search for qualitative or unusual criteria. Rich details are not returned; call maps_place_details only for selected finalists. Cost: T2 | Fan-out: S.";
 
 const SCHEMA = {
-  query: z.string().describe("Text search query (e.g., 'Italian restaurants in Manhattan', 'hotels near Taipei 101')"),
+  query: z
+    .string()
+    .describe(
+      "Descriptive place query including the relevant category and area, such as 'Italian restaurants in Manhattan'."
+    ),
   locationBias: z
     .object({
-      latitude: z.number().describe("Latitude to bias results toward"),
-      longitude: z.number().describe("Longitude to bias results toward"),
-      radius: z.number().optional().describe("Bias radius in meters (default: 5000)"),
+      latitude: z.number().describe("Latitude in decimal degrees for the result bias."),
+      longitude: z.number().describe("Longitude in decimal degrees for the result bias."),
+      radius: z.number().optional().describe("Bias radius in meters; defaults to 5000."),
     })
     .optional()
-    .describe("Optional location to bias results toward"),
-  openNow: z.boolean().optional().describe("Only return places that are currently open"),
-  minRating: z.number().optional().describe("Minimum rating filter (1.0 - 5.0)"),
-  includedType: z.string().optional().describe("Filter by place type (e.g., restaurant, cafe, hotel)"),
+    .describe("Optional geographic bias; this influences ranking rather than imposing a strict boundary."),
+  openNow: z.boolean().optional().describe("Set true to filter to places open now; opening hours are not returned."),
+  minRating: z.number().optional().describe("Optional 1.0-5.0 minimum-rating filter; ratings are not returned."),
+  includedType: z.string().optional().describe("Optional Places type filter such as restaurant, cafe, or hotel."),
 };
 
 export type SearchPlacesParams = z.infer<z.ZodObject<typeof SCHEMA>>;

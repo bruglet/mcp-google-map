@@ -2,15 +2,29 @@ import { createPlaceUrl, UrlLocation } from "./mapsUrlService.js";
 import { z } from "zod";
 
 export const locationInputSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("query"), value: z.string().min(1) }),
-  z.object({ kind: z.literal("place_id"), value: z.string().min(1), label: z.string().optional() }),
   z.object({
-    kind: z.literal("coordinates"),
-    latitude: z.number().min(-90).max(90),
-    longitude: z.number().min(-180).max(180),
-    label: z.string().optional(),
+    kind: z.literal("query").describe("Use query for an address or unstructured place name."),
+    value: z.string().min(1).describe("Address or place name; pass precise addresses directly when available."),
   }),
-  z.object({ kind: z.literal("maps_url"), value: z.string().url() }),
+  z.object({
+    kind: z
+      .literal("place_id")
+      .describe("Use place_id for a canonical Google Place ID returned by a search or resolver."),
+    value: z.string().min(1).describe("Google Place ID returned by a Maps search or resolver tool."),
+    label: z.string().optional().describe("Optional human-readable name used in returned labels and URLs."),
+  }),
+  z.object({
+    kind: z.literal("coordinates").describe("Use coordinates when latitude and longitude are already known."),
+    latitude: z.number().min(-90).max(90).describe("Latitude in decimal degrees from -90 to 90."),
+    longitude: z.number().min(-180).max(180).describe("Longitude in decimal degrees from -180 to 180."),
+    label: z.string().optional().describe("Optional human-readable name used in returned labels and URLs."),
+  }),
+  z.object({
+    kind: z
+      .literal("maps_url")
+      .describe("Use maps_url only for a Google Maps link that must be resolved for this operation."),
+    value: z.string().url().describe("Full Google Maps or maps.app.goo.gl URL supplied by the user."),
+  }),
 ]);
 
 export type LocationInput = z.infer<typeof locationInputSchema>;

@@ -4,10 +4,12 @@ import { getCurrentApiKey } from "../../utils/requestContext.js";
 
 const NAME = "maps_geocode";
 const DESCRIPTION =
-  "Convert an address, city name, or landmark into GPS coordinates (latitude/longitude). Use when you need coordinates for a location described in text — for example, to provide a center point for search_nearby or a starting point for maps_directions.";
+  "Convert an address, city, or landmark into coordinates and a formatted address. Use only when the user needs coordinates or a later operation specifically requires them; routes and most searches accept addresses directly, so do not geocode those inputs first.";
 
 const SCHEMA = {
-  address: z.string().describe("Address or place name to convert to coordinates"),
+  address: z
+    .string()
+    .describe("Address, city, or landmark name to convert; use the most specific text supplied by the user."),
 };
 
 export type GeocodeParams = z.infer<z.ZodObject<typeof SCHEMA>>;

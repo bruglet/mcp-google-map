@@ -4,15 +4,20 @@ import { getCurrentApiKey } from "../../utils/requestContext.js";
 
 const NAME = "maps_plan_route";
 const DESCRIPTION =
-  "Plan a bounded multi-stop route in one call using the caller's addresses, coordinates, or Place IDs directly. Waypoint reordering is opt-in because it promotes the Routes request; the default preserves the supplied order and returns compact leg directions. planner_mode=conservative allows up to 8 intermediate stops and thorough up to 16; 11 or more intermediates are also Routes Pro even without reordering. Use when the user says 'visit these 5 places efficiently', 'plan a route through A, B, C', or needs a multi-stop itinerary. Departure time provides schedule context; traffic-aware routing is not enabled implicitly. Transit uses the time-propagating itinerary planner.";
+  "Plan a bounded non-transit route through multiple supplied locations and return compact leg directions, preserving input order unless optimization is requested. Use for requests such as 'drive through A, B, and C'; use maps_directions for one A-to-B route and maps_transit_itinerary or maps_plan_transit for transit. Waypoint optimization and routes with 11 or more intermediate stops are higher-tier; traffic is never enabled implicitly. Cost: T1-T2 | Fan-out: S.";
 
 const SCHEMA = {
   stops: z
     .array(z.string())
     .min(2)
     .max(18)
-    .describe("List of addresses or landmarks to visit (minimum 2; planner-capped)"),
-  mode: z.enum(["driving", "walking", "bicycling", "transit"]).optional().describe("Travel mode (default: driving)"),
+    .describe(
+      "Ordered addresses, Place IDs, or coordinate strings to visit, including origin and final destination; minimum 2 and planner-capped."
+    ),
+  mode: z
+    .enum(["driving", "walking", "bicycling", "transit"])
+    .optional()
+    .describe("Travel mode; defaults to driving. For transit, use maps_transit_itinerary instead."),
   optimize: z
     .boolean()
     .default(false)
@@ -33,7 +38,12 @@ const SCHEMA = {
     .boolean()
     .optional()
     .describe('Avoid highways where reasonable. Only supported with mode "driving".'),
-  planner_mode: z.enum(["conservative", "thorough"]).default("conservative"),
+  planner_mode: z
+    .enum(["conservative", "thorough"])
+    .default("conservative")
+    .describe(
+      "Use conservative for up to 8 intermediate stops; choose thorough only when the request requires up to 16."
+    ),
 };
 
 export type PlanRouteParams = z.infer<z.ZodObject<typeof SCHEMA>>;

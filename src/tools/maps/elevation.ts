@@ -4,17 +4,17 @@ import { getCurrentApiKey } from "../../utils/requestContext.js";
 
 const NAME = "maps_elevation";
 const DESCRIPTION =
-  "Get elevation (meters above sea level) for geographic coordinates. Use when the user asks 'how high is this place', 'is this area flood-prone', or needs altitude for hiking/cycling route profiles. Also useful for real estate risk assessment — low elevation near water suggests flood risk.";
+  "Return elevation in meters for one or more coordinates. Use when the user asks for altitude or needs elevation samples for terrain context; this is not a flood-risk assessment or a route-profile tool, so supply each point to sample. Cost: T2 | Fan-out: S-L by location count.";
 
 const SCHEMA = {
   locations: z
     .array(
       z.object({
-        latitude: z.number().describe("Latitude coordinate"),
-        longitude: z.number().describe("Longitude coordinate"),
+        latitude: z.number().describe("Latitude in decimal degrees."),
+        longitude: z.number().describe("Longitude in decimal degrees."),
       })
     )
-    .describe("List of locations to get elevation data for"),
+    .describe("Coordinates to sample in one batched request; results correspond to this input order."),
 };
 
 export type ElevationParams = z.infer<z.ZodObject<typeof SCHEMA>>;

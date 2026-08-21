@@ -6,14 +6,30 @@ import { GroundingLiteService } from "../../services/GroundingLiteService.js";
 
 const NAME = "maps_find_places_by_transit";
 const DESCRIPTION =
-  "Find semantic place candidates and rank them by transit time from an origin. Discovery is bounded and only finalists receive detailed routes. least_walking and fewest_transfers guide Google's transit preference automatically, but the duration-only shortlist means non-time objectives remain bounded heuristics. Cost: T1 | Fan-out: L.";
+  "Discover places matching a semantic request and rank bounded finalists by transit accessibility from one origin, returning exact itineraries for the finalists. Use for requests such as 'find a good grocery store within 30 minutes by transit'; use maps_search_places for non-transit discovery and maps_compare_places for comparing already-simple candidates across any mode. Non-time objectives use a duration-based shortlist, so they are bounded heuristics. Cost: T1 | Fan-out: L.";
 const SCHEMA = {
-  origin: locationInputSchema,
-  query: z.string(),
-  departure_time: z.string().optional(),
-  max_minutes: z.number().positive().optional(),
-  objective: z.enum(["fastest", "fewest_transfers", "least_walking", "balanced"]).default("fastest"),
-  planner_mode: z.enum(["conservative", "thorough"]).default("conservative"),
+  origin: locationInputSchema.describe("Transit starting point as a query, Place ID, coordinates, or Maps URL."),
+  query: z
+    .string()
+    .describe(
+      "Natural-language description of the places to discover, including the relevant category and qualitative criteria."
+    ),
+  departure_time: z.string().optional().describe("ISO 8601 transit departure time; defaults to now."),
+  max_minutes: z
+    .number()
+    .positive()
+    .optional()
+    .describe("Optional maximum one-way transit duration in minutes used to exclude coarse candidates."),
+  objective: z
+    .enum(["fastest", "fewest_transfers", "least_walking", "balanced"])
+    .default("fastest")
+    .describe("Ranking goal; least_walking and fewest_transfers also guide Google transit requests."),
+  planner_mode: z
+    .enum(["conservative", "thorough"])
+    .default("conservative")
+    .describe(
+      "Use conservative by default; choose thorough only when broader discovery is clearly warranted. Thorough can exact-route up to 10 finalists instead of 3."
+    ),
 };
 export type FindPlacesByTransitParams = z.infer<z.ZodObject<typeof SCHEMA>>;
 

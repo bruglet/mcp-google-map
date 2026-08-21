@@ -6,23 +6,51 @@ import { GroundingLiteService } from "../../services/GroundingLiteService.js";
 
 const NAME = "maps_optimize_transit_errands";
 const DESCRIPTION =
-  "Choose branches and order for several transit errands. Uses bounded candidate discovery, targeted matrix approximation, local branch/order search, and chronological exact reranking. least_walking and fewest_transfers guide Google's transit preference automatically; because coarse matrices expose duration rather than full walking/transfer detail, non-time objectives remain bounded heuristics. Cost: T1 | Fan-out: L.";
+  "Choose both the branch and visit order for several transit errands, then return the best chronological itinerary and alternatives. Use when errands may be queries such as 'an IKEA' or fixed locations; use maps_plan_transit when every stop is already known and only order may change. Candidate discovery and exact rerouting are bounded, and non-time objectives use a duration-based shortlist, so they are heuristics rather than guaranteed global optima. Cost: T1 | Fan-out: L.";
 const SCHEMA = {
-  origin: locationInputSchema,
+  origin: locationInputSchema.describe("Trip starting point as a query, Place ID, coordinates, or Maps URL."),
   errands: z
     .array(
       z.object({
-        query: z.string().optional(),
-        location: locationInputSchema.optional(),
-        dwell_minutes: z.number().int().min(0).default(0),
+        query: z
+          .string()
+          .optional()
+          .describe(
+            "Semantic branch-discovery request, such as 'an IKEA'; provide either query or location for each errand."
+          ),
+        location: locationInputSchema
+          .optional()
+          .describe(
+            "Caller-supplied fixed place for this errand; provide instead of query when the branch is already known."
+          ),
+        dwell_minutes: z
+          .number()
+          .int()
+          .min(0)
+          .default(0)
+          .describe("Minutes expected at this errand, carried with it when errands are reordered; defaults to 0."),
       })
     )
-    .min(1),
-  final_destination: locationInputSchema.optional(),
-  return_to_origin: z.boolean().default(false),
-  departure_time: z.string().optional(),
-  objective: z.enum(["fastest", "fewest_transfers", "least_walking", "balanced"]).default("fastest"),
-  planner_mode: z.enum(["conservative", "thorough"]).default("conservative"),
+    .min(1)
+    .describe("Errands to complete; each must specify exactly one discovery query or fixed location."),
+  final_destination: locationInputSchema
+    .optional()
+    .describe("Optional fixed endpoint after all errands; omit for an open-ended trip."),
+  return_to_origin: z
+    .boolean()
+    .default(false)
+    .describe("Set true to return to origin after all errands; do not combine with a different final_destination."),
+  departure_time: z.string().optional().describe("ISO 8601 departure time for the first leg; defaults to now."),
+  objective: z
+    .enum(["fastest", "fewest_transfers", "least_walking", "balanced"])
+    .default("fastest")
+    .describe("Ranking goal; least_walking and fewest_transfers also guide Google transit requests."),
+  planner_mode: z
+    .enum(["conservative", "thorough"])
+    .default("conservative")
+    .describe(
+      "Use conservative by default; choose thorough only when broader branch discovery is clearly warranted. Thorough can exact-route up to 10 finalists instead of 3."
+    ),
 };
 export type OptimizeTransitErrandsParams = z.infer<z.ZodObject<typeof SCHEMA>>;
 
