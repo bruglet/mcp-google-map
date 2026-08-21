@@ -10,7 +10,7 @@ Snapshot date: 2026-08-19.
 | ---- | --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
 | T0   | Local and non-billable                              | URL construction, request-scoped memoization, planner search                                              |
 | T1   | Essentials or currently free experimental operation | Geocoding, basic Routes/Matrix, Grounding resolution                                                       |
-| T2   | Pro                                                 | Places candidate discovery (display name/primary type), traffic-aware driving, geometry, waypoint ordering |
+| T2   | Pro                                                 | Places candidate discovery (display name/primary type), traffic-aware driving, 11–25 intermediate waypoints, waypoint ordering |
 | T3   | Enterprise                                          | Hours, ratings, rating count, price, phone, website                                                        |
 | T4   | Enterprise + Atmosphere                             | Reviews, summaries, parking, payment, dining and amenity attributes                                        |
 
@@ -28,9 +28,9 @@ Identity and location are always present. The builder deduplicates fields, expan
 
 Summary is the default route detail. Steps, geometry, and full masks are additive. Traffic is `none` unless explicitly selected and is driving-only. Alternatives and waypoint ordering are opt-in. Transit intermediate waypoints are rejected because transit routing does not support them.
 
-Matrix accounting is `origins × destinations`, including elements that return no route. The direct MCP matrix tool uses a conservative 100-element local guard for every mode. Composite planner modes use 100 elements per provider request and allow at most 100 total elements in conservative mode or 300 in thorough mode, splitting valid requests where needed.
+Matrix accounting is `origins × destinations`, including elements that return no route. The direct MCP matrix tool uses a conservative 100-element local guard for every mode. Composite planner modes use 100 elements per provider request and allow at most 100 total elements in conservative mode or 300 in thorough mode, splitting valid requests where needed. Exact finalist reranking allows 3 routes in conservative mode and 10 in thorough mode.
 
-Waypoint ordering is opt-in. It is recorded as Routes Pro when enabled; ordinary multi-stop planning passes addresses, coordinates, or Place IDs directly and preserves the supplied order. Current provider SKU names are centralized in `src/services/costPolicy.ts` and should be rechecked against the [Google SKU details](https://developers.google.com/maps/billing-and-pricing/sku-details?hl=en) before changing them.
+Waypoint ordering is opt-in. It is recorded as Routes Pro when enabled; requests with 11–25 intermediate waypoints are also Routes Pro. Ordinary multi-stop planning passes addresses, coordinates, or Place IDs directly and preserves the supplied order. Current provider SKU names are centralized in `src/services/costPolicy.ts` and should be rechecked against the [Google SKU details](https://developers.google.com/maps/billing-and-pricing/sku-details?hl=en) before changing them.
 
 ## Warning ledger and operator guard overrides
 

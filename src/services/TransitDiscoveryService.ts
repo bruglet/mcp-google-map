@@ -1,7 +1,12 @@
 import { GroundingLiteService } from "./GroundingLiteService.js";
 import { NewPlacesService } from "./NewPlacesService.js";
-import { RoutesService } from "./RoutesService.js";
-import { computeBoundedTransitMatrix, scoreItinerary, TransitItineraryService } from "./TransitItineraryService.js";
+import { RoutesService, TransitPreference } from "./RoutesService.js";
+import {
+  computeBoundedTransitMatrix,
+  inferredTransitPreference,
+  scoreItinerary,
+  TransitItineraryService,
+} from "./TransitItineraryService.js";
 import { PlannerMode, plannerLimits } from "./costPolicy.js";
 
 export interface TransitPlaceCandidate {
@@ -30,6 +35,7 @@ export class TransitDiscoveryService {
     if (!candidates.length) throw new Error(`No places found for "${params.query}".`);
     const routes = new RoutesService(this.apiKey);
     const itinerary = new TransitItineraryService(routes);
+    const effectiveTransitPreference = inferredTransitPreference(params.objective);
     const selected = candidates.slice(0, plannerLimits(params.plannerMode).candidatesPerGroup);
     const destinations = selected.map((candidate) => locationString(candidate));
     const matrix = await computeBoundedTransitMatrix(
@@ -38,6 +44,7 @@ export class TransitDiscoveryService {
         origins: [params.origin],
         destinations,
         departureTime: params.departureTime,
+        transitPreference: effectiveTransitPreference,
         parentTool: "maps_find_places_by_transit",
       },
       plannerLimits(params.plannerMode).matrixElements
@@ -111,9 +118,19 @@ export class TransitDiscoveryService {
     }
     if (groups.some((group) => !group.length)) throw new Error("At least one errand has no candidate locations.");
     const finalDestination = params.finalDestination || (params.returnToOrigin ? params.origin : undefined);
-    const matrixEdges = buildErrandMatrixEdges(params.origin, groups, finalDestination);
+    const effectiveTransitPreference = inferredTransitPreference(params.objective);
+    const initialCandidateCounts = groups.map((group) => group.length);
+    const reduction = trimErrandCandidateGroups(
+      groups,
+      params.errands.map((errand) => !errand.location),
+      params.origin,
+      finalDestination,
+      limits.matrixElements
+    );
+    const trimmedGroups = reduction.groups;
+    const matrixEdges = reduction.matrixEdges;
     console.error(
-      `[COST PLAN] ${"maps_optimize_transit_errands"} projects ${matrixEdges.length} transit matrix elements before execution.`
+      `[COST PLAN] ${"maps_optimize_transit_errands"} projects ${matrixEdges.length} transit matrix elements after reducing ${reduction.removedCandidateCounts.reduce((sum, count) => sum + count, 0)} candidates from an initial projection of ${reduction.initialMatrixElements}.`
     );
     if (matrixEdges.length > limits.matrixElements)
       throw new Error(
@@ -123,9 +140,10 @@ export class TransitDiscoveryService {
       new RoutesService(this.apiKey),
       matrixEdges,
       params.departureTime,
-      "maps_optimize_transit_errands"
+      "maps_optimize_transit_errands",
+      effectiveTransitPreference
     );
-    const coarse = beamErrandOrders(groups, params.origin, finalDestination, durations, mode).slice(
+    const coarse = beamErrandOrders(trimmedGroups, params.origin, finalDestination, durations, mode).slice(
       0,
       limits.exactRoutes
     );
@@ -147,6 +165,7 @@ export class TransitDiscoveryService {
           departureTime: params.departureTime,
           objective: params.objective,
           dwellMinutes: candidate.order.map((choice) => params.errands[choice.groupIndex].dwell_minutes || 0),
+          transitPreference: effectiveTransitPreference,
           plannerMode: params.plannerMode,
           parentTool: "maps_optimize_transit_errands",
         }),
@@ -160,12 +179,17 @@ export class TransitDiscoveryService {
     return {
       selected: exact[0],
       alternatives: exact.slice(1, 3),
-      candidateCounts: groups.map((group) => group.length),
+      candidateCounts: trimmedGroups.map((group) => group.length),
       matrixElements: matrixEdges.length,
       guardReductions: {
         plannerMode: mode,
         exactItineraries: coarse.length,
         maxCandidatesPerErrand: Math.min(4, limits.candidatesPerGroup),
+        initialCandidateCounts,
+        finalCandidateCounts: trimmedGroups.map((group) => group.length),
+        removedCandidateCounts: reduction.removedCandidateCounts,
+        initialMatrixElements: reduction.initialMatrixElements,
+        finalMatrixElements: matrixEdges.length,
       },
     };
   }
@@ -281,7 +305,8 @@ async function computeTargetedTransitDurations(
   routesService: RoutesService,
   edges: MatrixEdge[],
   departureTime?: Date,
-  parentTool = "maps_distance_matrix"
+  parentTool = "maps_distance_matrix",
+  transitPreference?: TransitPreference
 ): Promise<Map<string, number>> {
   const durations = new Map<string, number>();
   const byOrigin = new Map<string, Set<string>>();
@@ -299,6 +324,7 @@ async function computeTargetedTransitDurations(
         destinations: batch,
         mode: "transit",
         departureTime,
+        transitPreference,
         parentTool,
       });
       for (let index = 0; index < batch.length; index++) {
@@ -308,6 +334,46 @@ async function computeTargetedTransitDurations(
     }
   }
   return durations;
+}
+
+function trimErrandCandidateGroups(
+  groups: TransitPlaceCandidate[][],
+  reducibleGroups: boolean[],
+  origin: string,
+  finalDestination: string | undefined,
+  maxElements: number
+): {
+  groups: TransitPlaceCandidate[][];
+  matrixEdges: MatrixEdge[];
+  initialMatrixElements: number;
+  initialCandidateCounts: number[];
+  removedCandidateCounts: number[];
+} {
+  const trimmedGroups = groups.map((group) => [...group]);
+  const initialCandidateCounts = trimmedGroups.map((group) => group.length);
+  const removedCandidateCounts = trimmedGroups.map(() => 0);
+  const initialMatrixElements = buildErrandMatrixEdges(origin, trimmedGroups, finalDestination).length;
+  let matrixEdges = buildErrandMatrixEdges(origin, trimmedGroups, finalDestination);
+
+  while (matrixEdges.length > maxElements) {
+    let groupToTrim = -1;
+    for (let index = 0; index < trimmedGroups.length; index++) {
+      if (!reducibleGroups[index] || trimmedGroups[index].length <= 1) continue;
+      if (groupToTrim === -1 || trimmedGroups[index].length > trimmedGroups[groupToTrim].length) groupToTrim = index;
+    }
+    if (groupToTrim === -1) break;
+    trimmedGroups[groupToTrim].pop();
+    removedCandidateCounts[groupToTrim]++;
+    matrixEdges = buildErrandMatrixEdges(origin, trimmedGroups, finalDestination);
+  }
+
+  return {
+    groups: trimmedGroups,
+    matrixEdges,
+    initialMatrixElements,
+    initialCandidateCounts,
+    removedCandidateCounts,
+  };
 }
 
 function beamErrandOrders(

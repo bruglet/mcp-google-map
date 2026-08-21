@@ -35,6 +35,16 @@ export interface TransitItinerary {
   warnings: string[];
 }
 
+export function inferredTransitPreference(
+  objective: TransitItinerary["objective"] | undefined,
+  explicit?: TransitPreference
+): TransitPreference | undefined {
+  if (explicit) return explicit;
+  if (objective === "least_walking") return "LESS_WALKING";
+  if (objective === "fewest_transfers") return "FEWER_TRANSFERS";
+  return undefined;
+}
+
 export class TransitItineraryService {
   private readonly routeCache = new Map<string, Promise<Awaited<ReturnType<RoutesService["computeRoutes"]>>>>();
 
@@ -58,6 +68,7 @@ export class TransitItineraryService {
         `This itinerary has ${params.locations.length - 2} intermediate stops; the ${params.plannerMode || "conservative"} planner limit is ${limits.fixedStops}.`
       );
     const initialDeparture = params.departureTime || new Date();
+    const effectiveTransitPreference = inferredTransitPreference(params.objective, params.transitPreference);
     // Steps are the default for this composite tool because lines, stops, and
     // transfers cannot be derived reliably from a summary-only route.
     const detailLevel = params.detailLevel || "steps";
@@ -75,7 +86,7 @@ export class TransitItineraryService {
         departureTime: nextDeparture,
         detailLevel,
         transitModes: params.transitModes,
-        transitPreference: params.transitPreference,
+        transitPreference: effectiveTransitPreference,
         parentTool: params.parentTool || "maps_transit_itinerary",
       });
       const route = result.routes[0];
@@ -161,6 +172,7 @@ export class TransitItineraryService {
         `This request has ${params.stops.length} stops; the ${params.plannerMode || "conservative"} planner limit is ${limits.fixedStops}.`
       );
     const final = params.finalDestination || (params.returnToOrigin ? params.origin : undefined);
+    const effectiveTransitPreference = inferredTransitPreference(params.objective, params.transitPreference);
     const nodes = [...new Set([params.origin, ...params.stops, ...(final ? [final] : [])])];
     const matrixEdges = buildFixedStopMatrixEdges(params.origin, params.stops, final);
     const edgeDurations = await computeTargetedTransitMatrix(
@@ -169,7 +181,7 @@ export class TransitItineraryService {
       {
         departureTime: params.departureTime,
         transitModes: params.transitModes,
-        transitPreference: params.transitPreference,
+        transitPreference: effectiveTransitPreference,
         parentTool: "maps_plan_transit",
       },
       limits.matrixElements
@@ -197,10 +209,10 @@ export class TransitItineraryService {
         this.routeFixedPath({
           locations: order,
           departureTime: params.departureTime,
-          dwellMinutes: params.dwellMinutes,
+          dwellMinutes: reorderedDwellMinutes(order, params.stops, params.dwellMinutes, final),
           detailLevel: params.detailLevel,
           transitModes: params.transitModes,
-          transitPreference: params.transitPreference,
+          transitPreference: effectiveTransitPreference,
           objective: params.objective,
           plannerMode: params.plannerMode,
           parentTool: "maps_plan_transit",
@@ -238,6 +250,21 @@ export class TransitItineraryService {
     this.routeCache.set(key, request);
     return request;
   }
+}
+
+function reorderedDwellMinutes(
+  order: string[],
+  stops: string[],
+  dwellMinutes: number[] | undefined,
+  finalDestination: string | undefined
+): number[] | undefined {
+  if (!dwellMinutes) return undefined;
+  const dwellByStop = new Map(stops.map((stop, index) => [stop, dwellMinutes[index] || 0]));
+  return order
+    .slice(1)
+    .map((location, index, destinations) =>
+      finalDestination !== undefined && index === destinations.length - 1 ? 0 : (dwellByStop.get(location) ?? 0)
+    );
 }
 
 function extractArrivalTime(route: any): string | undefined {

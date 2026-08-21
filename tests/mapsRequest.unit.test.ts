@@ -4,6 +4,7 @@ import type { PlacesClient } from "@googlemaps/places";
 import { NewPlacesService } from "../src/services/NewPlacesService.js";
 import { PlacesSearcher } from "../src/services/PlacesSearcher.js";
 import { RoutesService, buildRoutesFieldMask } from "../src/services/RoutesService.js";
+import { GoogleMapsTools } from "../src/services/toolclass.js";
 
 test("Place Details makes one minimal Places New request by default", async () => {
   const calls: Array<{ method: string; mask: string }> = [];
@@ -114,6 +115,42 @@ test("waypoint optimization is opt-in and accounted as Routes Pro", async () => 
   }
 });
 
+test("more than 10 intermediate waypoints are accounted as Routes Pro", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalError = console.error;
+  const logs: string[] = [];
+  try {
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({ routes: [{ distanceMeters: 100, duration: "60s", description: "test" }] }), {
+        status: 200,
+      });
+    console.error = (...args: unknown[]) => logs.push(args.join(" "));
+    await new RoutesService("test-key").computeRoutes({
+      origin: "A",
+      destination: "B",
+      mode: "driving",
+      intermediates: Array.from({ length: 10 }, (_, index) => `I${index}`),
+    });
+    await new RoutesService("test-key").computeRoutes({
+      origin: "A",
+      destination: "B",
+      mode: "driving",
+      intermediates: Array.from({ length: 11 }, (_, index) => `I${index}`),
+    });
+    const entries = logs
+      .filter((entry) => entry.startsWith("[COST] "))
+      .map((entry) => JSON.parse(entry.slice("[COST] ".length)));
+    assert.deepEqual(
+      entries.map((entry) => entry.tier),
+      ["T1", "T2"]
+    );
+    assert.equal(entries[1].sku, "Routes: Compute Routes Pro");
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.error = originalError;
+  }
+});
+
 test("direct matrices stop at the local 100-element guard", async () => {
   let outboundCalls = 0;
   const originalFetch = globalThis.fetch;
@@ -172,4 +209,33 @@ test("transit intermediates are rejected before an outbound request", async () =
       }),
     /do not support intermediate waypoints/
   );
+});
+
+test("batched Elevation accounting records one request unit", async () => {
+  const originalError = console.error;
+  const logs: string[] = [];
+  const tools = new GoogleMapsTools("test-key") as unknown as {
+    client: { elevation: () => Promise<{ data: { status: string; results: Array<{ elevation: number }> } }> };
+    getElevation: (locations: Array<{ latitude: number; longitude: number }>) => Promise<unknown>;
+  };
+  tools.client = {
+    elevation: async () => ({
+      data: {
+        status: "OK",
+        results: [{ elevation: 10 }, { elevation: 20 }],
+      },
+    }),
+  };
+  try {
+    console.error = (...args: unknown[]) => logs.push(args.join(" "));
+    await tools.getElevation([
+      { latitude: 1, longitude: 2 },
+      { latitude: 3, longitude: 4 },
+    ]);
+    const entry = JSON.parse(logs.find((log) => log.startsWith("[COST] "))!.slice("[COST] ".length));
+    assert.equal(entry.units, 1);
+    assert.equal(entry.projectedUnits, 1);
+  } finally {
+    console.error = originalError;
+  }
 });
