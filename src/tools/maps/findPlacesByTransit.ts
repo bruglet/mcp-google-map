@@ -6,7 +6,7 @@ import { GroundingLiteService } from "../../services/GroundingLiteService.js";
 
 const NAME = "maps_find_places_by_transit";
 const DESCRIPTION =
-  "Discover a bounded set of literal and semantic place candidates near one origin, then rank transit-reachable finalists with exact chronological itineraries. Use for requests such as 'find a Walmart within 60 minutes by transit'; use maps_search_places when transit accessibility is not part of the request, maps_transit_itinerary for a fixed path, and maps_plan_transit when all stops are already known. Results combine origin-biased Grounding Lite and minimal Places search; max_minutes filters actual one-way transit time, and non-time objectives use a duration-based shortlist heuristic. Cost: T1/T2 | Fan-out: L.";
+  "Discover a bounded set of literal and semantic place candidates near one origin, then rank transit-reachable finalists with exact chronological itineraries. Use for requests such as 'find a Walmart within 60 minutes by transit'; use maps_search_places when transit accessibility is not part of the request, maps_transit_itinerary for a fixed path, and maps_plan_transit when all stops are already known. Results combine origin-biased Grounding Lite and minimal Places search; max_minutes filters complete one-way transit time after exact routing, and non-time objectives use a duration-based shortlist heuristic. Each valid itinerary reports complete door-to-door timing and dwellSeconds; invalid exact finalists are returned separately in invalidFinalists and never ranked, and their max_minutes status is not verified. Cost: T1/T2 | Fan-out: L.";
 const SCHEMA = {
   origin: locationInputSchema.describe("Transit starting point as a query, Place ID, coordinates, or Maps URL."),
   query: z
