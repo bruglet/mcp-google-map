@@ -7,7 +7,7 @@ import { GroundingLiteService } from "../../services/GroundingLiteService.js";
 
 const NAME = "maps_plan_transit";
 const DESCRIPTION =
-  "Choose the visit order for known transit stops and return the best chronological itinerary plus bounded alternatives. Use when the user supplies fixed places but allows reordering; use maps_transit_itinerary when order is fixed and maps_optimize_transit_errands when branches must also be chosen. Non-time objectives use a duration-based shortlist before exact rerouting, so they are bounded heuristics rather than guaranteed global optima. Cost: T1 | Fan-out: L; matrix elements are counted.";
+  "Choose the visit order for known transit stops and return the best chronological itinerary plus bounded alternatives. Use when the user supplies fixed places but allows reordering; use maps_transit_itinerary when order is fixed and maps_optimize_transit_errands when branches must also be chosen. Exact rankings use complete destination arrival times including waiting and dwell; non-time objectives use a duration-based shortlist before exact rerouting, so they remain bounded heuristics rather than guaranteed global optima. Cost: T1 | Fan-out: L; matrix elements are counted.";
 const SCHEMA = {
   origin: locationInputSchema.describe("Trip starting point as a query, Place ID, coordinates, or Maps URL."),
   stops: z
@@ -21,11 +21,18 @@ const SCHEMA = {
     .boolean()
     .default(false)
     .describe("Set true to return to origin after all stops; do not combine with a different final_destination."),
-  departure_time: z.string().optional().describe("ISO 8601 departure time for the first leg; defaults to now."),
+  departure_time: z
+    .string()
+    .optional()
+    .describe(
+      "ISO 8601 timestamp for the requested start of the first leg; defaults to now. Later legs use complete arrival plus dwell."
+    ),
   dwell_minutes: z
     .array(z.number().int().min(0))
     .optional()
-    .describe("Minutes spent at each stop, aligned with stops before reordering; omitted entries are zero."),
+    .describe(
+      "Minutes spent at each named stop before reordering; the value follows that stop into its reordered position, and the terminal destination receives zero dwell."
+    ),
   detail_level: z
     .enum(["summary", "steps", "geometry", "full"])
     .default("steps")

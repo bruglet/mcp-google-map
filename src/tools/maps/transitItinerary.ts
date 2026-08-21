@@ -7,19 +7,24 @@ import { GroundingLiteService } from "../../services/GroundingLiteService.js";
 
 const NAME = "maps_transit_itinerary";
 const DESCRIPTION =
-  "Return a chronological transit itinerary for locations that must be visited in the supplied order, including per-leg timing, lines, stops, transfers, metrics, and a Maps URL for each leg. Use for an ordered A-to-B-to-C trip; use maps_plan_transit when stop order may change or maps_directions for one transit leg. Each leg departs after the prior arrival plus dwell time because Google transit does not support intermediate waypoints. Cost: T1 | Fan-out: M.";
+  "Return a chronological transit itinerary for locations that must be visited in the supplied order, including complete per-leg arrival/departure times, optional first-vehicle boarding and last-vehicle alighting times, lines, stops, transfers, non-overlapping walking/transit/waiting metrics, and one Maps URL per leg. Use for an ordered A-to-B-to-C trip; use maps_plan_transit when stop order may change or maps_directions for one transit leg. Each later leg starts after the prior destination arrival plus dwell; Google transit does not support intermediate waypoints. Cost: T1 | Fan-out: M.";
 const SCHEMA = {
   locations: z
     .array(locationInputSchema)
     .min(2)
     .max(18)
     .describe("Locations in required visit order, each as a query, Place ID, coordinates, or Maps URL; minimum 2."),
-  departure_time: z.string().optional().describe("ISO 8601 departure time for the first leg; defaults to now."),
+  departure_time: z
+    .string()
+    .optional()
+    .describe(
+      "ISO 8601 timestamp for the requested start of the first leg; defaults to now. Arrival includes the complete route duration."
+    ),
   dwell_minutes: z
     .array(z.number().int().min(0))
     .optional()
     .describe(
-      "Minutes spent after each non-final location, aligned with locations except the final destination; omitted entries are zero."
+      "Minutes spent after each visited intermediate location, aligned with locations before reordering; omitted entries are zero. Dwell is added after complete arrival before the next leg begins."
     ),
   detail_level: z
     .enum(["summary", "steps", "geometry", "full"])
