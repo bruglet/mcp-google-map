@@ -22,6 +22,11 @@ interface DiscoveryBias {
   radius: number;
 }
 
+interface DiscoveryResult {
+  candidates: TransitPlaceCandidate[];
+  groundingUnavailable: boolean;
+}
+
 export interface TransitPlaceCandidate {
   name: string;
   placeId?: string;
@@ -51,13 +56,14 @@ export class TransitDiscoveryService {
       placesService,
       "maps_find_places_by_transit"
     );
-    const candidates = await this.discover(
+    const discovery = await this.discover(
       params.query,
       params.plannerMode,
       "maps_find_places_by_transit",
       discoveryBias,
       placesService
     );
+    const candidates = discovery.candidates;
     if (!candidates.length) throw new Error(`No places found for "${params.query}".`);
     const routes = new RoutesService(this.apiKey);
     const itinerary = new TransitItineraryService(routes);
@@ -75,6 +81,9 @@ export class TransitDiscoveryService {
       },
       plannerLimits(params.plannerMode).matrixElements
     );
+    const matrixUnavailableCount = selected.filter(
+      (_candidate, index) => matrix.durations[0]?.[index]?.value == null
+    ).length;
     const ranked = selected
       .map((candidate, index) => ({ ...candidate, coarseDurationSeconds: matrix.durations[0]?.[index]?.value ?? null }))
       .filter((candidate) => candidate.coarseDurationSeconds !== null)
@@ -85,7 +94,16 @@ export class TransitDiscoveryService {
     const finalistPool = ranked.slice(0, plannerLimits(params.plannerMode).exactRoutes);
     const finalists: TransitPlaceCandidate[] = [];
     const invalidFinalists: Array<TransitPlaceCandidate & { timingError: TransitTimingError }> = [];
-    const warnings: string[] = [];
+    const warnings: string[] = [
+      ...(discovery.groundingUnavailable
+        ? ["Semantic Grounding discovery was unavailable; literal Places results were used."]
+        : []),
+      ...(matrixUnavailableCount
+        ? [
+            `Transit Matrix found no route for ${matrixUnavailableCount} of ${selected.length} discovered candidates at the requested departure time.`,
+          ]
+        : []),
+    ];
     for (const candidate of finalistPool) {
       const hydrated = await this.hydrateCandidate(candidate, placesService, "maps_find_places_by_transit");
       if (!isCompleteCandidateIdentity(hydrated)) {
@@ -169,7 +187,7 @@ export class TransitDiscoveryService {
           "maps_optimize_transit_errands"
         )
       : undefined;
-    const discoveryCache = new Map<string, Promise<TransitPlaceCandidate[]>>();
+    const discoveryCache = new Map<string, Promise<DiscoveryResult>>();
     const discoverOnce = (query: string) => {
       const cached = discoveryCache.get(query);
       if (cached) return cached;
@@ -178,11 +196,14 @@ export class TransitDiscoveryService {
       return request;
     };
     const groups: TransitPlaceCandidate[][] = [];
+    let groundingUnavailable = false;
     for (const errand of params.errands) {
       if (errand.location) groups.push([{ name: errand.location, address: errand.location }]);
-      else if (errand.query)
-        groups.push((await discoverOnce(errand.query)).slice(0, Math.min(4, limits.candidatesPerGroup)));
-      else throw new Error("Each errand needs either query or location.");
+      else if (errand.query) {
+        const discovery = await discoverOnce(errand.query);
+        groundingUnavailable ||= discovery.groundingUnavailable;
+        groups.push(discovery.candidates.slice(0, Math.min(4, limits.candidatesPerGroup)));
+      } else throw new Error("Each errand needs either query or location.");
     }
     if (groups.some((group) => !group.length)) throw new Error("At least one errand has no candidate locations.");
     const finalDestination = params.finalDestination || (params.returnToOrigin ? params.origin : undefined);
@@ -255,12 +276,17 @@ export class TransitDiscoveryService {
         scoreItinerary(left.itinerary, params.objective || "fastest") -
         scoreItinerary(right.itinerary, params.objective || "fastest")
     );
-    const warnings = invalidFinalists.length
-      ? [
-          `${invalidFinalists.length} exact finalist(s) were excluded because Google returned invalid chronology.`,
-          ...(exact.length ? [] : ["No transit itinerary could be ranked safely from the exact finalists."]),
-        ]
-      : [];
+    const warnings = [
+      ...(groundingUnavailable
+        ? ["Semantic Grounding discovery was unavailable; literal Places results were used."]
+        : []),
+      ...(invalidFinalists.length
+        ? [
+            `${invalidFinalists.length} exact finalist(s) were excluded because Google returned invalid chronology.`,
+            ...(exact.length ? [] : ["No transit itinerary could be ranked safely from the exact finalists."]),
+          ]
+        : []),
+    ];
     return {
       selected: exact[0] || null,
       alternatives: exact.slice(1, 3),
@@ -287,8 +313,9 @@ export class TransitDiscoveryService {
     parentTool = "maps_find_places_by_transit",
     locationBias?: DiscoveryBias,
     placesService = new NewPlacesService(this.apiKey)
-  ): Promise<TransitPlaceCandidate[]> {
+  ): Promise<DiscoveryResult> {
     const groundedCandidates: TransitPlaceCandidate[] = [];
+    let groundingUnavailable = false;
     try {
       const grounded = await new GroundingLiteService(this.apiKey).searchPlaces(
         query,
@@ -297,7 +324,7 @@ export class TransitDiscoveryService {
       );
       groundedCandidates.push(...extractGroundedPlaces(grounded).slice(0, plannerLimits(mode).candidatesPerGroup));
     } catch {
-      // Places remains available when Grounding Lite is unavailable.
+      groundingUnavailable = true;
     }
 
     const places = await placesService.searchText({
@@ -307,9 +334,14 @@ export class TransitDiscoveryService {
       parentTool,
     });
     const placeCandidates = places.map(candidateFromPlace);
-    return mergeCandidates([...placeCandidates, ...groundedCandidates])
+    const candidates = mergeCandidates([...placeCandidates, ...groundedCandidates])
       .sort((left, right) => compareDiscoveryDistance(left, right, locationBias))
       .slice(0, plannerLimits(mode).candidatesPerGroup);
+    if (!candidates.length && groundingUnavailable)
+      throw new Error(
+        `No places found for "${query}": semantic Grounding discovery was unavailable and literal Places returned no candidates.`
+      );
+    return { candidates, groundingUnavailable };
   }
 
   private async resolveDiscoveryBias(
@@ -367,7 +399,7 @@ function toGroundingLocationBias(locationBias: DiscoveryBias): GroundingLocation
   return {
     circle: {
       center: { latitude: locationBias.lat, longitude: locationBias.lng },
-      radius: locationBias.radius,
+      radius_meters: locationBias.radius,
     },
   };
 }

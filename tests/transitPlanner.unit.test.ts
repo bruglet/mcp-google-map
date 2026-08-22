@@ -179,9 +179,20 @@ test("errand planning trims query candidates before matrix fan-out", async () =>
   const originalMatrix = RoutesService.prototype.computeRouteMatrix;
   const originalRoutes = RoutesService.prototype.computeRoutes;
   const service = new TransitDiscoveryService("test-key");
-  (service as unknown as { discover: (query: string) => Promise<Array<{ name: string; address: string }>> }).discover =
-    async (query: string) =>
-      Array.from({ length: 4 }, (_, index) => ({ name: `${query}-${index}`, address: `${query}-${index}` }));
+  (
+    service as unknown as {
+      discover: (query: string) => Promise<{
+        candidates: Array<{ name: string; address: string }>;
+        groundingUnavailable: boolean;
+      }>;
+    }
+  ).discover = async (query: string) => ({
+    candidates: Array.from({ length: 4 }, (_, index) => ({
+      name: `${query}-${index}`,
+      address: `${query}-${index}`,
+    })),
+    groundingUnavailable: false,
+  });
   RoutesService.prototype.computeRouteMatrix = async function (
     params: Parameters<RoutesService["computeRouteMatrix"]>[0]
   ) {
@@ -433,7 +444,7 @@ test("transit place discovery combines origin-biased sources for the USC Village
 
     assert.deepEqual(placesBiases[0], { lat: 34.023, lng: -118.286, radius: 25_000 });
     assert.deepEqual(groundingBiases[0], {
-      circle: { center: { latitude: 34.023, longitude: -118.286 }, radius: 25_000 },
+      circle: { center: { latitude: 34.023, longitude: -118.286 }, radius_meters: 25_000 },
     });
     assert.equal(matrixCalls.length, 1);
     assert.equal(matrixCalls[0].destinations.length, 4);
@@ -445,6 +456,168 @@ test("transit place discovery combines origin-biased sources for the USC Village
     assert.ok(result.candidates.every((candidate: any) => candidate.googleMapsUrl.includes("api=1")));
     assert.equal(exactCalls.length, 3);
     assert.match(result.warnings.join(" "), /exact transit time exceeded 60 minutes/);
+  } finally {
+    if (originalAck === undefined) delete process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK;
+    else process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK = originalAck;
+    GoogleMapsTools.prototype.geocode = originalGeocode;
+    GroundingLiteService.prototype.searchPlaces = originalGroundingSearch;
+    NewPlacesService.prototype.searchText = originalPlacesSearch;
+    RoutesService.prototype.computeRouteMatrix = originalMatrix;
+    RoutesService.prototype.computeRoutes = originalRoutes;
+  }
+});
+
+test("qualitative transit discovery keeps nearby Grounding candidates through matrix shortlisting", async () => {
+  const originalAck = process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK;
+  const originalGeocode = GoogleMapsTools.prototype.geocode;
+  const originalGroundingSearch = GroundingLiteService.prototype.searchPlaces;
+  const originalPlacesSearch = NewPlacesService.prototype.searchText;
+  const originalMatrix = RoutesService.prototype.computeRouteMatrix;
+  const originalRoutes = RoutesService.prototype.computeRoutes;
+  let exactCalls = 0;
+  process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK = "true";
+  GoogleMapsTools.prototype.geocode = async function () {
+    return { location: { lat: 34.023, lng: -118.286 }, formatted_address: "USC Village", place_id: "origin" };
+  };
+  GroundingLiteService.prototype.searchPlaces = async function (_query, _parentTool, locationBias) {
+    assert.deepEqual(locationBias, {
+      circle: { center: { latitude: 34.023, longitude: -118.286 }, radius_meters: 25_000 },
+    });
+    return {
+      structuredContent: {
+        places: [
+          {
+            place: "places/soro-coffee",
+            displayName: { text: "SORO Coffee" },
+            formattedAddress: "Los Angeles, CA",
+            location: { latitude: 34.025, longitude: -118.29 },
+          },
+        ],
+      },
+    };
+  };
+  NewPlacesService.prototype.searchText = async function () {
+    return Array.from({ length: 10 }, (_, index) => ({
+      name: `Literal result ${index}`,
+      place_id: `literal-${index}`,
+      formatted_address: `Far result ${index}, CA`,
+      geometry: { location: { lat: 34.2 + index * 0.01, lng: -118.0 } },
+    }));
+  };
+  RoutesService.prototype.computeRouteMatrix = async function (params) {
+    return {
+      distances: params.origins.map(() => params.destinations.map(() => ({ value: 1, text: "1 m" }))),
+      durations: params.origins.map(() =>
+        params.destinations.map((destination) =>
+          destination.includes("soro-coffee") ? { value: 600, text: "10 mins" } : null
+        )
+      ),
+      origin_addresses: params.origins,
+      destination_addresses: params.destinations,
+    };
+  };
+  RoutesService.prototype.computeRoutes = async function (params) {
+    exactCalls++;
+    assert.match(params.destination, /soro-coffee/);
+    return {
+      routes: [{ duration: "600s", legs: [{ duration: "600s", steps: [] }] }],
+      total_duration: { value: 600, text: "10 mins" },
+    };
+  };
+  try {
+    const result = await new TransitDiscoveryService("test-key").findPlacesByTransit({
+      origin: "USC Village, Los Angeles, CA",
+      query: "a quiet independent coffee shop suitable for studying",
+      plannerMode: "thorough",
+    });
+
+    assert.equal(result.candidates.length, 1);
+    assert.equal(result.candidates[0].name, "SORO Coffee");
+    assert.equal(result.candidates[0].placeId, "soro-coffee");
+    assert.equal(exactCalls, 1);
+    assert.match(result.warnings.join(" "), /no route for 9 of 10 discovered candidates/);
+    assert.doesNotMatch(result.warnings.join(" "), /Grounding discovery was unavailable/);
+  } finally {
+    if (originalAck === undefined) delete process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK;
+    else process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK = originalAck;
+    GoogleMapsTools.prototype.geocode = originalGeocode;
+    GroundingLiteService.prototype.searchPlaces = originalGroundingSearch;
+    NewPlacesService.prototype.searchText = originalPlacesSearch;
+    RoutesService.prototype.computeRouteMatrix = originalMatrix;
+    RoutesService.prototype.computeRoutes = originalRoutes;
+  }
+});
+
+test("transit discovery explains Grounding fallback and matrix-unavailable candidates", async () => {
+  const originalAck = process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK;
+  const originalGeocode = GoogleMapsTools.prototype.geocode;
+  const originalGroundingSearch = GroundingLiteService.prototype.searchPlaces;
+  const originalPlacesSearch = NewPlacesService.prototype.searchText;
+  const originalMatrix = RoutesService.prototype.computeRouteMatrix;
+  const originalRoutes = RoutesService.prototype.computeRoutes;
+  let exactCalls = 0;
+  process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK = "true";
+  GoogleMapsTools.prototype.geocode = async function () {
+    return { location: { lat: 34.023, lng: -118.286 }, formatted_address: "USC Village", place_id: "origin" };
+  };
+  GroundingLiteService.prototype.searchPlaces = async function () {
+    throw new Error("GROUNDING_UNAVAILABLE");
+  };
+  NewPlacesService.prototype.searchText = async function (params) {
+    if (params.textQuery === "nothing") return [];
+    const count = params.textQuery === "unroutable" ? 2 : 1;
+    return Array.from({ length: count }, (_, index) => ({
+      name: `Place ${index}`,
+      place_id: `${params.textQuery}-${index}`,
+      formatted_address: `Place ${index}, Los Angeles, CA`,
+      geometry: { location: { lat: 34.03 + index * 0.01, lng: -118.28 } },
+    }));
+  };
+  RoutesService.prototype.computeRouteMatrix = async function (params) {
+    const unavailable = params.destinations.every((destination) => destination.includes("unroutable"));
+    return {
+      distances: params.origins.map(() => params.destinations.map(() => ({ value: 1, text: "1 m" }))),
+      durations: params.origins.map(() =>
+        params.destinations.map(() => (unavailable ? null : { value: 600, text: "10 mins" }))
+      ),
+      origin_addresses: params.origins,
+      destination_addresses: params.destinations,
+    };
+  };
+  RoutesService.prototype.computeRoutes = async function () {
+    exactCalls++;
+    return {
+      routes: [{ duration: "600s", legs: [{ duration: "600s", steps: [] }] }],
+      total_duration: { value: 600, text: "10 mins" },
+    };
+  };
+  try {
+    const fallback = await new TransitDiscoveryService("test-key").findPlacesByTransit({
+      origin: "USC Village, Los Angeles, CA",
+      query: "literal place",
+    });
+    assert.equal(fallback.candidates.length, 1);
+    assert.equal(
+      fallback.warnings.filter((warning: string) => warning.includes("Grounding discovery was unavailable")).length,
+      1
+    );
+
+    const unavailable = await new TransitDiscoveryService("test-key").findPlacesByTransit({
+      origin: "USC Village, Los Angeles, CA",
+      query: "unroutable",
+    });
+    assert.deepEqual(unavailable.candidates, []);
+    assert.deepEqual(unavailable.invalidFinalists, []);
+    assert.match(unavailable.warnings.join(" "), /no route for 2 of 2 discovered candidates/);
+    assert.equal(exactCalls, 1, "all-unavailable candidates must not be exact-routed");
+
+    await assert.rejects(
+      new TransitDiscoveryService("test-key").findPlacesByTransit({
+        origin: "USC Village, Los Angeles, CA",
+        query: "nothing",
+      }),
+      /Grounding discovery was unavailable and literal Places returned no candidates/
+    );
   } finally {
     if (originalAck === undefined) delete process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK;
     else process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK = originalAck;
@@ -543,7 +716,7 @@ test("errand discovery anchors every query group around the trip origin", async 
     assert.deepEqual(
       groundingBiases,
       Array.from({ length: 2 }, () => ({
-        circle: { center: { latitude: 34.023, longitude: -118.286 }, radius: 25_000 },
+        circle: { center: { latitude: 34.023, longitude: -118.286 }, radius_meters: 25_000 },
       }))
     );
     assert.ok(matrixLocations.has("place_id:target-usc"));
@@ -553,6 +726,67 @@ test("errand discovery anchors every query group around the trip origin", async 
       "place_id:target-usc",
     ]);
     assert.deepEqual(result.guardReductions.initialCandidateCounts, [4, 4]);
+  } finally {
+    if (originalAck === undefined) delete process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK;
+    else process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK = originalAck;
+    GoogleMapsTools.prototype.geocode = originalGeocode;
+    GroundingLiteService.prototype.searchPlaces = originalGroundingSearch;
+    NewPlacesService.prototype.searchText = originalPlacesSearch;
+    RoutesService.prototype.computeRouteMatrix = originalMatrix;
+    RoutesService.prototype.computeRoutes = originalRoutes;
+  }
+});
+
+test("errand discovery consolidates repeated Grounding fallback warnings", async () => {
+  const originalAck = process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK;
+  const originalGeocode = GoogleMapsTools.prototype.geocode;
+  const originalGroundingSearch = GroundingLiteService.prototype.searchPlaces;
+  const originalPlacesSearch = NewPlacesService.prototype.searchText;
+  const originalMatrix = RoutesService.prototype.computeRouteMatrix;
+  const originalRoutes = RoutesService.prototype.computeRoutes;
+  process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK = "true";
+  GoogleMapsTools.prototype.geocode = async function () {
+    return { location: { lat: 34.023, lng: -118.286 }, formatted_address: "USC Village", place_id: "origin" };
+  };
+  GroundingLiteService.prototype.searchPlaces = async function () {
+    throw new Error("GROUNDING_UNAVAILABLE");
+  };
+  NewPlacesService.prototype.searchText = async function (params) {
+    return [
+      {
+        name: params.textQuery,
+        place_id: params.textQuery.toLowerCase().replaceAll(" ", "-"),
+        formatted_address: `${params.textQuery}, Los Angeles, CA`,
+        geometry: { location: { lat: 34.03, lng: -118.28 } },
+      },
+    ];
+  };
+  RoutesService.prototype.computeRouteMatrix = async function (params) {
+    return {
+      distances: params.origins.map(() => params.destinations.map(() => ({ value: 1, text: "1 m" }))),
+      durations: params.origins.map(() => params.destinations.map(() => ({ value: 600, text: "10 mins" }))),
+      origin_addresses: params.origins,
+      destination_addresses: params.destinations,
+    };
+  };
+  RoutesService.prototype.computeRoutes = async function () {
+    return {
+      routes: [{ duration: "600s", legs: [{ duration: "600s", steps: [] }] }],
+      total_duration: { value: 600, text: "10 mins" },
+    };
+  };
+  try {
+    const result = await new TransitDiscoveryService("test-key").optimizeErrands({
+      origin: "USC Village, Los Angeles, CA",
+      errands: [{ query: "Coffee shop" }, { query: "Bookstore" }],
+      returnToOrigin: true,
+      plannerMode: "conservative",
+    });
+
+    assert.equal(
+      result.warnings.filter((warning: string) => warning.includes("Grounding discovery was unavailable")).length,
+      1
+    );
   } finally {
     if (originalAck === undefined) delete process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK;
     else process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK = originalAck;
@@ -618,7 +852,9 @@ test("errand discovery uses a coordinate origin in another metro without changin
     });
 
     assert.deepEqual(placesBiases, [{ lat: 41.88, lng: -87.63, radius: 25_000 }]);
-    assert.deepEqual(groundingBiases, [{ circle: { center: { latitude: 41.88, longitude: -87.63 }, radius: 25_000 } }]);
+    assert.deepEqual(groundingBiases, [
+      { circle: { center: { latitude: 41.88, longitude: -87.63 }, radius_meters: 25_000 } },
+    ]);
     assert.ok(matrixLocations.has("place_id:target-chicago"));
     assert.ok(matrixLocations.has("Walgreens, Chicago, IL"));
     assert.deepEqual(result.guardReductions.initialCandidateCounts, [1, 1]);
@@ -852,8 +1088,17 @@ test("fixed-stop and errand optimizers exclude invalid exact finalists", async (
   };
   try {
     const service = new TransitDiscoveryService("test-key");
-    (service as unknown as { discover: () => Promise<Array<{ name: string; address: string }>> }).discover =
-      async () => [{ name: "IKEA Burbank", address: "IKEA Burbank" }];
+    (
+      service as unknown as {
+        discover: () => Promise<{
+          candidates: Array<{ name: string; address: string }>;
+          groundingUnavailable: boolean;
+        }>;
+      }
+    ).discover = async () => ({
+      candidates: [{ name: "IKEA Burbank", address: "IKEA Burbank" }],
+      groundingUnavailable: false,
+    });
     const errandResult = await service.optimizeErrands({
       origin: "Home",
       originInput: { kind: "coordinates", latitude: 34, longitude: -118 },
