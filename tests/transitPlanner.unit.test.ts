@@ -938,7 +938,11 @@ test("raw route chronology includes initial waiting and final walking", async ()
   assert.ok(Date.parse(leg.firstTransitDepartureTime!) <= Date.parse(leg.lastTransitArrivalTime!));
   assert.ok(Date.parse(leg.lastTransitArrivalTime!) < Date.parse(leg.arrivalTime));
   assert.equal(leg.walkingSeconds! + leg.transitSeconds! + leg.waitingSeconds!, leg.durationSeconds);
-  assert.match(itinerary.warnings.join(" "), /raw estimate was retained/);
+  assert.match(
+    itinerary.warnings.join(" "),
+    /Google timing estimates differed by approximately 15 minutes; the validated schedule-aware arrival was used\./
+  );
+  assert.doesNotMatch(itinerary.warnings.join(" "), /Transit line details unavailable/);
 });
 
 test("route, leg, and schedule estimates remain usable without forcing exact equality", async () => {
@@ -960,6 +964,7 @@ test("route, leg, and schedule estimates remain usable without forcing exact equ
                       departureTime: "2030-01-01T10:01:00.000Z",
                       arrivalTime: "2030-01-01T10:06:30.000Z",
                     },
+                    transitLine: { shortName: "M1" },
                   },
                 },
                 { travelMode: "WALK", staticDuration: "30s" },
@@ -985,8 +990,148 @@ test("route, leg, and schedule estimates remain usable without forcing exact equ
   assert.equal(leg.walkingSeconds, 60);
   assert.equal(leg.transitSeconds, 330);
   assert.equal(leg.waitingSeconds, 30);
-  assert.match(itinerary.warnings.join(" "), /route and leg duration estimates differ/);
-  assert.match(itinerary.warnings.join(" "), /later schedule boundary was used/);
+  assert.doesNotMatch(itinerary.warnings.join(" "), /Google timing estimates differed/);
+});
+
+test("timing normalization warnings use the five-minute threshold and largest discrepancy", async () => {
+  const initial = new Date("2030-01-01T10:00:00.000Z");
+  const responses = [
+    {
+      routes: [{ duration: "600s", legs: [{ duration: "300s" }] }],
+      total_duration: { value: 600, text: "10 mins" },
+    },
+    {
+      routes: [{ duration: "660s", legs: [{ duration: "300s" }] }],
+      total_duration: { value: 660, text: "11 mins" },
+    },
+    {
+      routes: [{ duration: "600s", legs: [{ duration: "240s" }] }],
+      total_duration: { value: 600, text: "10 mins" },
+    },
+    {
+      routes: [{ duration: "900s", legs: [{ duration: "180s" }] }],
+      total_duration: { value: 900, text: "15 mins" },
+    },
+  ];
+  const fakeRoutes = {
+    computeRoutes: async () => responses.shift()!,
+  } as unknown as RoutesService;
+  const service = new TransitItineraryService(fakeRoutes);
+
+  const exactThreshold = await service.routeFixedPath({
+    locations: ["A", "B"],
+    departureTime: initial,
+    detailLevel: "summary",
+  });
+  assert.deepEqual(exactThreshold.warnings, [
+    "Google timing estimates differed by approximately 5 minutes; the validated schedule-aware arrival was used.",
+  ]);
+
+  const aboveThreshold = await service.routeFixedPath({
+    locations: ["C", "D"],
+    departureTime: initial,
+    detailLevel: "summary",
+  });
+  assert.deepEqual(aboveThreshold.warnings, [
+    "Google timing estimates differed by approximately 6 minutes; the validated schedule-aware arrival was used.",
+  ]);
+
+  const multipleDifferences = await service.routeFixedPath({
+    locations: ["E", "F", "G"],
+    departureTime: initial,
+    detailLevel: "summary",
+  });
+  assert.deepEqual(multipleDifferences.warnings, [
+    "Google timing estimates differed by approximately 12 minutes; the validated schedule-aware arrival was used.",
+  ]);
+});
+
+test("line-detail warnings count only missing metadata on requested transit segments", async () => {
+  const initial = new Date("2030-01-01T10:00:00.000Z");
+  const responses = [
+    {
+      routes: [
+        {
+          duration: "900s",
+          legs: [
+            {
+              duration: "900s",
+              steps: [
+                {
+                  travelMode: "TRANSIT",
+                  transitDetails: {
+                    stopDetails: {
+                      departureTime: "2030-01-01T10:01:00.000Z",
+                      arrivalTime: "2030-01-01T10:03:00.000Z",
+                    },
+                    transitLine: { shortName: "A" },
+                  },
+                },
+                {
+                  travelMode: "TRANSIT",
+                  transitDetails: {
+                    stopDetails: {
+                      departureTime: "2030-01-01T10:05:00.000Z",
+                      arrivalTime: "2030-01-01T10:08:00.000Z",
+                    },
+                  },
+                },
+                {
+                  travelMode: "TRANSIT",
+                  transitDetails: {
+                    stopDetails: {
+                      departureTime: "2030-01-01T10:10:00.000Z",
+                      arrivalTime: "2030-01-01T10:15:00.000Z",
+                    },
+                    transitLine: { shortName: "C" },
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      total_duration: { value: 900, text: "15 mins" },
+    },
+    {
+      routes: [{ duration: "600s", legs: [{ duration: "600s" }] }],
+      total_duration: { value: 600, text: "10 mins" },
+    },
+    {
+      routes: [
+        {
+          duration: "300s",
+          legs: [{ duration: "300s", steps: [{ travelMode: "WALK", staticDuration: "300s" }] }],
+        },
+      ],
+      total_duration: { value: 300, text: "5 mins" },
+    },
+  ];
+  const fakeRoutes = {
+    computeRoutes: async () => responses.shift()!,
+  } as unknown as RoutesService;
+  const service = new TransitItineraryService(fakeRoutes);
+
+  const partial = await service.routeFixedPath({
+    locations: ["A", "B"],
+    departureTime: initial,
+    detailLevel: "steps",
+  });
+  assert.match(partial.warnings.join(" "), /Transit line details unavailable for 1 of 3 transit segments\./);
+
+  const summary = await service.routeFixedPath({
+    locations: ["C", "D"],
+    departureTime: initial,
+    detailLevel: "summary",
+  });
+  assert.doesNotMatch(summary.warnings.join(" "), /Transit line details unavailable/);
+
+  const walkingOnly = await service.routeFixedPath({
+    locations: ["E", "F"],
+    departureTime: initial,
+    detailLevel: "steps",
+  });
+  assert.doesNotMatch(walkingOnly.warnings.join(" "), /Transit line details unavailable/);
 });
 
 test("incomplete or contradictory category estimates do not invalidate door-to-door timing", async () => {

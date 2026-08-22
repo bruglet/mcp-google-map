@@ -99,6 +99,9 @@ export class TransitItineraryService {
     let dwellMilliseconds = 0;
     const legs: TransitLeg[] = [];
     const warnings: string[] = [];
+    let largestTimingDiscrepancyMilliseconds = 0;
+    let transitSegmentCount = 0;
+    let missingTransitLineCount = 0;
 
     for (let index = 0; index < params.locations.length - 1; index++) {
       const from = params.locations[index];
@@ -119,6 +122,12 @@ export class TransitItineraryService {
       const arrivalTime = new Date(timing.arrivalTimeMilliseconds).toISOString();
       const summary = timing.summary;
       warnings.push(...timing.warnings);
+      largestTimingDiscrepancyMilliseconds = Math.max(
+        largestTimingDiscrepancyMilliseconds,
+        timing.normalizationDifferenceMilliseconds
+      );
+      transitSegmentCount += summary.transitSegmentCount || 0;
+      missingTransitLineCount += summary.missingTransitLineCount || 0;
       legs.push({
         from,
         to,
@@ -161,8 +170,16 @@ export class TransitItineraryService {
     const transitSeconds = sumKnown(legs.map((leg) => leg.transitSeconds));
     const waitingSeconds = sumKnown(legs.map((leg) => leg.waitingSeconds));
     const transfers = sumKnown(legs.map((leg) => leg.transfers));
-    if (legs.some((leg) => !leg.lines.length))
-      warnings.push("Some route legs did not include structured transit line details.");
+    if (largestTimingDiscrepancyMilliseconds >= MATERIAL_TIMING_DIFFERENCE_MILLISECONDS) {
+      const approximateMinutes = Math.round(largestTimingDiscrepancyMilliseconds / 60000);
+      warnings.push(
+        `Google timing estimates differed by approximately ${approximateMinutes} minutes; the validated schedule-aware arrival was used.`
+      );
+    }
+    if (missingTransitLineCount)
+      warnings.push(
+        `Transit line details unavailable for ${missingTransitLineCount} of ${transitSegmentCount} transit segments.`
+      );
     return {
       mode: "transit",
       detailLevel,
@@ -320,6 +337,8 @@ function reorderedDwellMinutes(
 interface TransitRouteSummary {
   lines: string[];
   stops: string[];
+  transitSegmentCount?: number;
+  missingTransitLineCount?: number;
   transfers?: number;
   walkingSeconds?: number;
   transitSeconds?: number;
@@ -329,13 +348,14 @@ interface TransitRouteSummary {
 interface TransitRouteTiming {
   durationMilliseconds: number;
   arrivalTimeMilliseconds: number;
+  normalizationDifferenceMilliseconds: number;
   firstTransitDepartureTime?: string;
   lastTransitArrivalTime?: string;
   warnings: string[];
   summary: TransitRouteSummary;
 }
 
-const TIMING_TOLERANCE_MILLISECONDS = 1000;
+const MATERIAL_TIMING_DIFFERENCE_MILLISECONDS = 300000;
 
 function validateTransitRoute(
   route: any,
@@ -347,6 +367,7 @@ function validateTransitRoute(
   if (routeDurationMilliseconds === undefined)
     throw new TransitChronologyError("Google returned no valid raw route duration.");
   const warnings: string[] = [];
+  let normalizationDifferenceMilliseconds = 0;
   const routeLegs = Array.isArray(route?.legs) ? route.legs : [];
   if (!routeLegs.length)
     warnings.push("Google returned no route legs; only aggregate door-to-door timing is available.");
@@ -357,17 +378,19 @@ function validateTransitRoute(
         (sum: number, duration: number | undefined) => sum + (duration || 0),
         0
       );
-      if (Math.abs(routeDurationMilliseconds - summedLegDurationMilliseconds) > TIMING_TOLERANCE_MILLISECONDS)
-        warnings.push("Google route and leg duration estimates differ; aggregate route timing was retained.");
+      normalizationDifferenceMilliseconds = Math.max(
+        normalizationDifferenceMilliseconds,
+        Math.abs(routeDurationMilliseconds - summedLegDurationMilliseconds)
+      );
     } else warnings.push("Google omitted a route-leg duration; aggregate route timing was retained.");
   }
 
   const normalizedDurationMilliseconds = secondsToMilliseconds(normalizedDurationSeconds);
-  if (
-    normalizedDurationMilliseconds !== undefined &&
-    Math.abs(normalizedDurationMilliseconds - routeDurationMilliseconds) > TIMING_TOLERANCE_MILLISECONDS
-  )
-    warnings.push("The Routes adapter duration differed from the raw route duration; the raw estimate was retained.");
+  if (normalizedDurationMilliseconds !== undefined)
+    normalizationDifferenceMilliseconds = Math.max(
+      normalizationDifferenceMilliseconds,
+      Math.abs(normalizedDurationMilliseconds - routeDurationMilliseconds)
+    );
   const aggregateArrivalTimeMilliseconds = departureTime.getTime() + routeDurationMilliseconds;
 
   const summary: TransitRouteSummary = { lines: [], stops: [] };
@@ -375,6 +398,7 @@ function validateTransitRoute(
     return {
       durationMilliseconds: routeDurationMilliseconds,
       arrivalTimeMilliseconds: aggregateArrivalTimeMilliseconds,
+      normalizationDifferenceMilliseconds,
       warnings,
       summary,
     };
@@ -384,6 +408,7 @@ function validateTransitRoute(
     return {
       durationMilliseconds: routeDurationMilliseconds,
       arrivalTimeMilliseconds: aggregateArrivalTimeMilliseconds,
+      normalizationDifferenceMilliseconds,
       warnings,
       summary,
     };
@@ -393,6 +418,7 @@ function validateTransitRoute(
   let walkingMilliseconds = 0;
   let transitMilliseconds = 0;
   let transitStepCount = 0;
+  let missingTransitLineCount = 0;
   let walkingDurationsComplete = true;
   let transitTimestampsComplete = true;
   let categoryBreakdownComplete = true;
@@ -445,6 +471,7 @@ function validateTransitRoute(
     const line = step.transitDetails.transitLine;
     const lineName = line?.name || line?.shortName;
     if (lineName) lines.add(lineName);
+    else missingTransitLineCount++;
     const departureStop = stopDetails?.departureStop?.name?.text;
     const arrivalStop = stopDetails?.arrivalStop?.name?.text;
     if (departureStop) stops.add(departureStop);
@@ -477,19 +504,21 @@ function validateTransitRoute(
     scheduleLowerBoundMilliseconds ?? aggregateArrivalTimeMilliseconds
   );
   const durationMilliseconds = arrivalTimeMilliseconds - departureTime.getTime();
-  if (arrivalTimeMilliseconds > aggregateArrivalTimeMilliseconds)
-    warnings.push(
-      "Scheduled transit events extend beyond the aggregate route estimate; the later schedule boundary was used."
-    );
+  normalizationDifferenceMilliseconds = Math.max(
+    normalizationDifferenceMilliseconds,
+    arrivalTimeMilliseconds - aggregateArrivalTimeMilliseconds
+  );
 
   summary.lines = [...lines];
   summary.stops = [...stops];
+  summary.transitSegmentCount = transitStepCount;
+  summary.missingTransitLineCount = missingTransitLineCount;
   if (transitStepCount === 0 && steps.every((step: any) => step.travelMode === "WALK")) {
-    if (
-      walkingDurationsComplete &&
-      Math.abs(walkingMilliseconds - durationMilliseconds) > TIMING_TOLERANCE_MILLISECONDS
-    )
-      warnings.push("Google walking-step and aggregate duration estimates differ; aggregate timing was retained.");
+    if (walkingDurationsComplete)
+      normalizationDifferenceMilliseconds = Math.max(
+        normalizationDifferenceMilliseconds,
+        Math.abs(walkingMilliseconds - durationMilliseconds)
+      );
     summary.transfers = 0;
     summary.walkingSeconds = durationMilliseconds / 1000;
     summary.transitSeconds = 0;
@@ -511,6 +540,7 @@ function validateTransitRoute(
   return {
     durationMilliseconds,
     arrivalTimeMilliseconds,
+    normalizationDifferenceMilliseconds,
     firstTransitDepartureTime:
       !transitTimestampsComplete || firstTransitDepartureMilliseconds === undefined
         ? undefined
