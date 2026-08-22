@@ -90,6 +90,53 @@ test("Grounding Lite prefers its dedicated server-side key", () => {
   }
 });
 
+test("Grounding place search sends the documented origin-bias contract", async () => {
+  const originalTermsAck = process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK;
+  type ToolCall = { name: string; arguments: Record<string, unknown> };
+  const calls: ToolCall[] = [];
+  try {
+    process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK = "true";
+    const service = new GroundingLiteService("test-key");
+    (
+      service as unknown as {
+        client: () => Promise<{ callTool: (request: ToolCall) => Promise<{ structuredContent: { places: never[] } }> }>;
+      }
+    ).client = async () => ({
+      callTool: async (request: ToolCall) => {
+        calls.push(request);
+        return { structuredContent: { places: [] } };
+      },
+    });
+
+    await service.searchPlaces("quiet coffee shop", "test", {
+      circle: {
+        center: { latitude: 34.023, longitude: -118.286 },
+        radius_meters: 25_000,
+      },
+    });
+
+    assert.deepEqual(calls, [
+      {
+        name: "search_places",
+        arguments: {
+          text_query: "quiet coffee shop",
+          location_bias: {
+            circle: {
+              center: { latitude: 34.023, longitude: -118.286 },
+              radius_meters: 25_000,
+            },
+          },
+        },
+      },
+    ]);
+    const locationBias = calls[0].arguments.location_bias as { circle: Record<string, unknown> };
+    assert.equal("radius" in locationBias.circle, false);
+  } finally {
+    if (originalTermsAck === undefined) delete process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK;
+    else process.env.GOOGLE_MAPS_GROUNDING_TERMS_ACK = originalTermsAck;
+  }
+});
+
 test("tool filtering fails closed for empty or unknown profiles", () => {
   const original = process.env.GOOGLE_MAPS_ENABLED_TOOLS;
   try {

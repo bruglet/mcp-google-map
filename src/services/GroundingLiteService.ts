@@ -7,7 +7,7 @@ const GROUNDING_ENDPOINT = "https://mapstools.googleapis.com/mcp";
 export interface GroundingLocationBias {
   circle: {
     center: { latitude: number; longitude: number };
-    radius: number;
+    radius_meters: number;
   };
 }
 
