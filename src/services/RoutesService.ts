@@ -91,12 +91,26 @@ export function buildRoutesFieldMask(
 
 export const ROUTE_MATRIX_FIELD_MASK = "originIndex,destinationIndex,distanceMeters,duration,status,condition";
 
+// Place IDs are opaque. Match common raw forms conservatively; use places/<id> for other IDs.
+const ROUTES_RAW_PLACE_ID_PATTERN = /^(?:ChIJ|GhIJ|Eic|Iho|EpI)[A-Za-z0-9_-]+$/;
+
+function parsePlaceId(location: string): string | undefined {
+  if (location.startsWith("place_id:")) return stripPlaceResourcePrefix(location.slice("place_id:".length));
+  if (location.startsWith("places/")) return location.slice("places/".length);
+  return ROUTES_RAW_PLACE_ID_PATTERN.test(location) ? location : undefined;
+}
+
+function stripPlaceResourcePrefix(value: string): string {
+  return value.startsWith("places/") ? value.slice("places/".length) : value;
+}
+
 function toWaypoint(location: string): any {
   const coordinateMatch = location.match(/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/);
   if (coordinateMatch) {
     return { location: { latLng: { latitude: Number(coordinateMatch[1]), longitude: Number(coordinateMatch[2]) } } };
   }
-  if (location.startsWith("place_id:")) return { placeId: location.slice("place_id:".length) };
+  const placeId = parsePlaceId(location);
+  if (placeId !== undefined) return { placeId };
   return { address: location };
 }
 

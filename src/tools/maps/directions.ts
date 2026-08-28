@@ -7,10 +7,16 @@ const DESCRIPTION =
   "Return a route between one origin and destination, including distance and duration, with optional steps, transit details, or geometry. Use for a specific A-to-B route; use maps_distance_matrix to compare many pairs, maps_plan_route for non-transit multi-stop routing, or maps_transit_itinerary for an ordered multi-leg transit trip. Summary is the default, and traffic-aware driving is higher-tier. Cost: T1-T2 | Fan-out: S.";
 
 const SCHEMA = {
-  origin: z.string().describe("Starting address, Place ID, or latitude,longitude; pass a known value directly."),
+  origin: z
+    .string()
+    .describe(
+      "Starting address, raw Place ID, places/<id> resource name, or latitude,longitude; pass a known value directly."
+    ),
   destination: z
     .string()
-    .describe("Destination address, Place ID, or latitude,longitude; pass a known value directly."),
+    .describe(
+      "Destination address, raw Place ID, places/<id> resource name, or latitude,longitude; pass a known value directly."
+    ),
   mode: z
     .enum(["driving", "walking", "bicycling", "transit"])
     .default("driving")

@@ -9,11 +9,13 @@ const DESCRIPTION =
 const SCHEMA = {
   origins: z
     .array(z.string())
-    .describe("Origin addresses, Place IDs, or latitude,longitude strings; pass known values directly."),
+    .describe(
+      "Origin addresses, raw Place IDs, places/<id> resource names, or latitude,longitude strings; pass known values directly."
+    ),
   destinations: z
     .array(z.string())
     .describe(
-      "Destination addresses, Place IDs, or latitude,longitude strings; every origin is paired with every destination."
+      "Destination addresses, raw Place IDs, places/<id> resource names, or latitude,longitude strings; every origin is paired with every destination."
     ),
   mode: z
     .enum(["driving", "walking", "bicycling", "transit"])

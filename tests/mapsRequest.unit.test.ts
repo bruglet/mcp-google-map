@@ -76,6 +76,118 @@ test("basic driving omits traffic and waypoint optimization", async () => {
   }
 });
 
+test("Routes serializes raw and resource Place IDs as placeId waypoints", async () => {
+  const originalFetch = globalThis.fetch;
+  let requestBody: Record<string, any> | undefined;
+  const leaveyLibrary = "ChIJh3cCFYbHwoARzm861lI1Wro";
+  const fishbowlChapel = "ChIJL9589eTHwoARermdS3ItWvE";
+  try {
+    globalThis.fetch = async (_input, init) => {
+      requestBody = JSON.parse(String(init?.body)) as Record<string, any>;
+      return new Response(JSON.stringify({ routes: [{ distanceMeters: 100, duration: "60s", description: "test" }] }), {
+        status: 200,
+      });
+    };
+    await new RoutesService("test-key").computeRoutes({
+      origin: leaveyLibrary,
+      destination: `places/${fishbowlChapel}`,
+      mode: "walking",
+      intermediates: [
+        `place_id:places/${leaveyLibrary}`,
+        "Leavey Library",
+        "1,2",
+        "GhIJtest",
+        "Eictest",
+        "Ihotest",
+        "EpItest",
+        "NotARecognizedPlaceIdToken",
+      ],
+    });
+
+    assert.deepEqual(requestBody?.origin, { placeId: leaveyLibrary });
+    assert.deepEqual(requestBody?.destination, { placeId: fishbowlChapel });
+    assert.deepEqual(requestBody?.intermediates, [
+      { placeId: leaveyLibrary },
+      { address: "Leavey Library" },
+      { location: { latLng: { latitude: 1, longitude: 2 } } },
+      { placeId: "GhIJtest" },
+      { placeId: "Eictest" },
+      { placeId: "Ihotest" },
+      { placeId: "EpItest" },
+      { address: "NotARecognizedPlaceIdToken" },
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Route matrices serialize raw, resource, and prefixed Place IDs as placeId waypoints", async () => {
+  const originalFetch = globalThis.fetch;
+  let requestBody: Record<string, any> | undefined;
+  const leaveyLibrary = "ChIJh3cCFYbHwoARzm861lI1Wro";
+  const fishbowlChapel = "ChIJL9589eTHwoARermdS3ItWvE";
+  try {
+    globalThis.fetch = async (_input, init) => {
+      requestBody = JSON.parse(String(init?.body)) as Record<string, any>;
+      return new Response("[]", { status: 200 });
+    };
+    await new RoutesService("test-key").computeRouteMatrix({
+      origins: [leaveyLibrary, `places/${fishbowlChapel}`, "Leavey Library", "1,2"],
+      destinations: [`place_id:places/${leaveyLibrary}`, "GhIJtest", "3,4"],
+      mode: "walking",
+    });
+
+    assert.deepEqual(requestBody?.origins, [
+      { waypoint: { placeId: leaveyLibrary } },
+      { waypoint: { placeId: fishbowlChapel } },
+      { waypoint: { address: "Leavey Library" } },
+      { waypoint: { location: { latLng: { latitude: 1, longitude: 2 } } } },
+    ]);
+    assert.deepEqual(requestBody?.destinations, [
+      { waypoint: { placeId: leaveyLibrary } },
+      { waypoint: { placeId: "GhIJtest" } },
+      { waypoint: { location: { latLng: { latitude: 3, longitude: 4 } } } },
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("multi-stop planning serializes Place ID stops through Routes", async () => {
+  const originalFetch = globalThis.fetch;
+  let requestBody: Record<string, any> | undefined;
+  const leaveyLibrary = "ChIJh3cCFYbHwoARzm861lI1Wro";
+  const fishbowlChapel = "ChIJL9589eTHwoARermdS3ItWvE";
+  try {
+    globalThis.fetch = async (_input, init) => {
+      requestBody = JSON.parse(String(init?.body)) as Record<string, any>;
+      return new Response(
+        JSON.stringify({
+          routes: [
+            {
+              legs: [
+                { distanceMeters: 100, duration: "60s" },
+                { distanceMeters: 200, duration: "120s" },
+              ],
+            },
+          ],
+        }),
+        { status: 200 }
+      );
+    };
+    await new PlacesSearcher("test-key").planRoute({
+      stops: [leaveyLibrary, `places/${fishbowlChapel}`, "1,2"],
+      mode: "walking",
+    });
+
+    assert.deepEqual(requestBody?.origin, { placeId: leaveyLibrary });
+    assert.deepEqual(requestBody?.destination, { location: { latLng: { latitude: 1, longitude: 2 } } });
+    assert.deepEqual(requestBody?.intermediates, [{ placeId: fishbowlChapel }]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("waypoint optimization is opt-in and accounted as Routes Pro", async () => {
   const originalFetch = globalThis.fetch;
   const originalError = console.error;

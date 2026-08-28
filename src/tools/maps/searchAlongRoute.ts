@@ -10,10 +10,16 @@ const SCHEMA = {
   textQuery: z
     .string()
     .describe("Place category or query to find along the route, such as restaurant, coffee shop, or gas station."),
-  origin: z.string().describe("Route-start address, Place ID, landmark, or coordinates; pass a known value directly."),
+  origin: z
+    .string()
+    .describe(
+      "Route-start address, raw Place ID, places/<id> resource name, landmark, or coordinates; pass a known value directly."
+    ),
   destination: z
     .string()
-    .describe("Route-end address, Place ID, landmark, or coordinates; pass a known value directly."),
+    .describe(
+      "Route-end address, raw Place ID, places/<id> resource name, landmark, or coordinates; pass a known value directly."
+    ),
   mode: z
     .enum(["driving", "walking", "bicycling", "transit"])
     .optional()

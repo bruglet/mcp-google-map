@@ -12,7 +12,7 @@ const SCHEMA = {
     .min(2)
     .max(18)
     .describe(
-      "Ordered addresses, Place IDs, or coordinate strings to visit, including origin and final destination; minimum 2 and planner-capped."
+      "Ordered addresses, raw Place IDs, places/<id> resource names, or coordinate strings to visit, including origin and final destination; minimum 2 and planner-capped."
     ),
   mode: z
     .enum(["driving", "walking", "bicycling", "transit"])
