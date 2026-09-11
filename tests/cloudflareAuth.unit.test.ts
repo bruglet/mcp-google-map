@@ -129,6 +129,13 @@ test("Cloudflare JWT validation accepts only a valid RS256 issuer and audience",
     .setIssuedAt(now)
     .setExpirationTime(now + 60)
     .sign(privateKey);
+  const serviceToken = await new SignJWT({ sub: "", common_name: "service-token.access" })
+    .setProtectedHeader({ alg: "RS256", kid: "test-key" })
+    .setIssuer(teamDomain)
+    .setAudience(audience)
+    .setIssuedAt(now)
+    .setExpirationTime(now + 60)
+    .sign(privateKey);
   const expired = await new SignJWT({ sub: "test-user" })
     .setProtectedHeader({ alg: "RS256", kid: "test-key" })
     .setIssuer(teamDomain)
@@ -159,6 +166,7 @@ test("Cloudflare JWT validation accepts only a valid RS256 issuer and audience",
 
   try {
     assert.deepEqual(await invoke(valid), { statusCode: 200, nextCalled: true });
+    assert.deepEqual(await invoke(serviceToken), { statusCode: 200, nextCalled: true });
     assert.equal((await invoke(expired)).statusCode, 403);
     assert.equal((await invoke(wrongAudience)).statusCode, 403);
     assert.equal((await invoke(wrongSignature)).statusCode, 403);
