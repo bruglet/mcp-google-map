@@ -1,6 +1,6 @@
 # Upstream deviations
 
-Base: CabLate `cablate/mcp-google-map` commit `be966cc`.
+Base after synchronization: CabLate `cablate/mcp-google-map` commit `47248ea`.
 
 This file is updated in the same change as each deviation to an upstream-owned file. New policy and planner behavior is kept in additive modules where possible. The table below is intentionally explicit so future upstream merges can be reviewed by responsibility rather than by an opaque fork diff.
 
@@ -36,3 +36,18 @@ This optimization pass intentionally does not remove or edit the retained local-
 3. Re-check Places/Routes official SKU and field documentation.
 4. Re-run the container, auth, ledger, Quadlet, and loopback boundary checks.
 5. Update this file in the same commit for every new upstream-owned-file deviation.
+
+## Upstream merge: 2026-11-13
+
+The merge retains server-only credentials, Cloudflare Access authentication, request accounting, bounded planners, and explicit enrichment groups.
+Container publication remains the fork release process. Upstream npm publication, Registry publication, and plugin installation metadata stay excluded.
+The existing fork skill and tool profiles remain active.
+
+- `NewPlacesService.ts`, `PlacesSearcher.ts`, and `costPolicy.ts` retain review sources and AI disclosure metadata within requested enrichment groups.
+- `RoutesService.ts` accepts structured waypoints. Waypoint optimization requires two intermediate stops and remains opt-in.
+- `PlacesSearcher.ts` retains direct route inputs without geocoding fan-out. Area exploration can use text search after geocoding fails.
+- `cli.ts` retains the fork tool list and environment credentials. Upstream command failure reporting and diagnostics remain available.
+- `BaseMcpServer.ts` continues to ignore credentials from request headers. Session tests validate this boundary.
+- Upstream tests use the fork contracts for credentials, route inputs, attribution, and the exposed CLI tools.
+
+Photo requests, implicit traffic awareness, disabled tools, and automatic waypoint optimization remain excluded.

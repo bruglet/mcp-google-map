@@ -215,7 +215,7 @@ test("waypoint optimization is opt-in and accounted as Routes Pro", async () => 
       origin: "A",
       destination: "B",
       mode: "driving",
-      intermediates: ["C"],
+      intermediates: ["C", "D"],
       optimizeWaypointOrder: true,
     });
     assert.equal(requestBody?.optimizeWaypointOrder, true);

@@ -226,8 +226,22 @@ export class NewPlacesService {
     }
     if (Object.keys(atmosphere).length) result.atmosphere = atmosphere;
     if (place.paymentOptions) result.payment_options = truthyObject(place.paymentOptions);
-    if (place.reviewSummary?.text?.text) result.review_summary = place.reviewSummary.text.text;
-    if (place.generativeSummary?.overview?.text) result.generative_summary = place.generativeSummary.overview.text;
+    if (place.googleMapsUri) result.google_maps_uri = place.googleMapsUri;
+    if (place.reviewSummary?.text?.text) {
+      result.review_summary = place.reviewSummary.text.text;
+      result.review_summary_attribution = {
+        disclosure_text: place.reviewSummary.disclosureText?.text || "",
+        flag_content_uri: place.reviewSummary.flagContentUri || "",
+        reviews_uri: place.reviewSummary.reviewsUri || "",
+      };
+    }
+    if (place.generativeSummary?.overview?.text) {
+      result.generative_summary = place.generativeSummary.overview.text;
+      result.generative_summary_attribution = {
+        disclosure_text: place.generativeSummary.disclosureText?.text || "",
+        flag_content_uri: place.generativeSummary.flagContentUri || "",
+      };
+    }
     if (Array.isArray(place.reviews)) {
       result.reviews = place.reviews.map((review: any) => ({
         rating: review.rating || 0,
@@ -235,6 +249,11 @@ export class NewPlacesService {
         language: review.text?.languageCode || null,
         time: review.publishTime?.seconds || 0,
         author_name: review.authorAttribution?.displayName || "",
+        author_uri: review.authorAttribution?.uri || "",
+        author_photo_uri: review.authorAttribution?.photoUri || "",
+        google_maps_uri: review.googleMapsUri || "",
+        flag_content_uri: review.flagContentUri || "",
+        relative_publish_time_description: review.relativePublishTimeDescription || "",
       }));
     }
     return result;

@@ -89,6 +89,24 @@ export function buildRoutesFieldMask(
   return [...new Set(fields)].join(",");
 }
 
+export const COORDINATE_STRING_PATTERN = /^\s*(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)\s*$/;
+
+export type RouteWaypoint = { latLng: { latitude: number; longitude: number } } | { placeId: string };
+export type WaypointInput = string | RouteWaypoint;
+
+/**
+ * Format a waypoint for human-readable error messages.
+ */
+function describeWaypoint(waypoint: WaypointInput): string {
+  if (typeof waypoint === "string") {
+    return waypoint;
+  }
+  if ("placeId" in waypoint) {
+    return `placeId:${waypoint.placeId}`;
+  }
+  return `${waypoint.latLng.latitude},${waypoint.latLng.longitude}`;
+}
+
 export const ROUTE_MATRIX_FIELD_MASK = "originIndex,destinationIndex,distanceMeters,duration,status,condition";
 
 // Place IDs are opaque. Match common raw forms conservatively; use places/<id> for other IDs.
@@ -104,7 +122,10 @@ function stripPlaceResourcePrefix(value: string): string {
   return value.startsWith("places/") ? value.slice("places/".length) : value;
 }
 
-function toWaypoint(location: string): any {
+function toWaypoint(location: WaypointInput): any {
+  if (typeof location !== "string") {
+    return "placeId" in location ? { placeId: location.placeId } : { location: { latLng: location.latLng } };
+  }
   const coordinateMatch = location.match(/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/);
   if (coordinateMatch) {
     return { location: { latLng: { latitude: Number(coordinateMatch[1]), longitude: Number(coordinateMatch[2]) } } };
@@ -163,12 +184,12 @@ export class RoutesService {
   }
 
   async computeRoutes(params: {
-    origin: string;
-    destination: string;
+    origin: WaypointInput;
+    destination: WaypointInput;
     mode?: string;
     departureTime?: Date;
     arrivalTime?: Date;
-    intermediates?: string[];
+    intermediates?: WaypointInput[];
     optimizeWaypointOrder?: boolean;
     avoidTolls?: boolean;
     avoidHighways?: boolean;
@@ -178,6 +199,8 @@ export class RoutesService {
     transitModes?: TransitMode[];
     transitPreference?: TransitPreference;
     parentTool?: string;
+    originLabel?: string;
+    destinationLabel?: string;
   }): Promise<{
     routes: any[];
     summary: string;
@@ -203,7 +226,7 @@ export class RoutesService {
     const routeModifiers = buildRouteModifiers(params, travelMode);
     if (routeModifiers) requestBody.routeModifiers = routeModifiers;
     if (params.intermediates?.length) requestBody.intermediates = params.intermediates.map(toWaypoint);
-    if (params.optimizeWaypointOrder && params.intermediates?.length && travelMode !== "TRANSIT")
+    if (params.optimizeWaypointOrder && (params.intermediates?.length ?? 0) > 1 && travelMode !== "TRANSIT")
       requestBody.optimizeWaypointOrder = true;
 
     const tier =
@@ -239,7 +262,7 @@ export class RoutesService {
     const data = await response.json();
     if (!data.routes?.length)
       throw new Error(
-        `No route found from "${params.origin}" to "${params.destination}" with mode: ${params.mode || "driving"}`
+        `No route found from "${params.originLabel ?? describeWaypoint(params.origin)}" to "${params.destinationLabel ?? describeWaypoint(params.destination)}" with mode: ${params.mode || "driving"}`
       );
     const route = data.routes[0];
     const result = {

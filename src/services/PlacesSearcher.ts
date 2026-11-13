@@ -1,6 +1,12 @@
 import { GoogleMapsTools } from "./toolclass.js";
 import { NewPlacesService } from "./NewPlacesService.js";
-import { RoutesService, parseDuration, formatDistance, formatDuration } from "./RoutesService.js";
+import {
+  RoutesService,
+  parseDuration,
+  formatDistance,
+  formatDuration,
+  COORDINATE_STRING_PATTERN,
+} from "./RoutesService.js";
 import { createPlaceUrl, createDirectionsUrl } from "./mapsUrlService.js";
 import {
   buildPlaceFieldMask,
@@ -108,6 +114,33 @@ interface ElevationResponse {
     elevation: number;
     location: { lat: number; lng: number };
   }>;
+}
+
+interface ResolvedLocation {
+  originalName: string;
+  address: string;
+  lat: number;
+  lng: number;
+  placeId: string;
+}
+
+/**
+ * Parse a "latitude,longitude" input, or null when it is not one or is out of range.
+ */
+function parseCoordinateInput(input: string): { lat: number; lng: number } | null {
+  const match = input.match(COORDINATE_STRING_PATTERN);
+  if (!match) {
+    return null;
+  }
+  const lat = parseFloat(match[1]);
+  const lng = parseFloat(match[2]);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return null;
+  }
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+    return null;
+  }
+  return { lat, lng };
 }
 
 export class PlacesSearcher {
@@ -256,6 +289,13 @@ export class PlacesSearcher {
             ...(details.serves ? { serves: details.serves } : {}),
             ...(details.atmosphere ? { atmosphere: details.atmosphere } : {}),
             ...(details.payment_options ? { payment_options: details.payment_options } : {}),
+            ...(details.google_maps_uri ? { google_maps_uri: details.google_maps_uri } : {}),
+            ...(details.review_summary_attribution
+              ? { review_summary_attribution: details.review_summary_attribution }
+              : {}),
+            ...(details.generative_summary_attribution
+              ? { generative_summary_attribution: details.generative_summary_attribution }
+              : {}),
             ...(details.review_summary ? { review_summary: details.review_summary } : {}),
             ...(details.generative_summary ? { generative_summary: details.generative_summary } : {}),
             ...(details.reviews
@@ -266,6 +306,11 @@ export class PlacesSearcher {
                     language: review.language || null,
                     time: review.time,
                     author_name: review.author_name,
+                    author_uri: review.author_uri,
+                    author_photo_uri: review.author_photo_uri,
+                    google_maps_uri: review.google_maps_uri,
+                    flag_content_uri: review.flag_content_uri,
+                    relative_publish_time_description: review.relative_publish_time_description,
                   })),
                 }
               : {}),
@@ -505,6 +550,57 @@ export class PlacesSearcher {
 
   // --------------- Composite Tools ---------------
 
+  private async resolveLocation(input: string, parentTool?: string): Promise<ResolvedLocation> {
+    if (COORDINATE_STRING_PATTERN.test(input)) {
+      const coordinates = parseCoordinateInput(input);
+      if (!coordinates) {
+        throw new Error(`Failed to resolve location: ${input} (not a valid "latitude,longitude" pair)`);
+      }
+      // Already exact, so geocoding only supplies a display address and its failure
+      // must not fail the stop. No place ID: the nearest addressable place would
+      // silently move the caller's point. geocode() over reverseGeocode() because it
+      // labels sparse areas better — "Canada" rather than a bare Plus Code.
+      const displayGeocode = await this.geocode(input, parentTool);
+      return {
+        originalName: input,
+        address: displayGeocode.success && displayGeocode.data ? displayGeocode.data.formatted_address : input,
+        lat: coordinates.lat,
+        lng: coordinates.lng,
+        placeId: "",
+      };
+    }
+
+    const geo = await this.geocode(input, parentTool);
+    if (geo.success && geo.data) {
+      return {
+        originalName: input,
+        address: geo.data.formatted_address,
+        lat: geo.data.location.lat,
+        lng: geo.data.location.lng,
+        placeId: geo.data.place_id,
+      };
+    }
+
+    // Any geocoding failure falls through, not just zero results: geocode() flattens
+    // every error into { success: false } with no status code. A systemic failure
+    // (bad key, exhausted quota) fails the text search too, and both errors are thrown.
+    const textSearch = await this.searchText({ query: input, parentTool });
+    if (textSearch.success && textSearch.data && textSearch.data.length > 0) {
+      const topMatch = textSearch.data[0];
+      return {
+        originalName: input,
+        address: topMatch.address || topMatch.name,
+        lat: topMatch.location.lat,
+        lng: topMatch.location.lng,
+        placeId: topMatch.place_id || "",
+      };
+    }
+
+    throw new Error(
+      `Failed to resolve location: ${input} (geocoding: ${geo.error || "no result"}; places text search: ${textSearch.error || "no result"})`
+    );
+  }
+
   async exploreArea(params: {
     location: string;
     types?: string[];
@@ -530,9 +626,8 @@ export class PlacesSearcher {
       );
 
     // 1. Geocode
-    const geo = await this.geocode(params.location, "maps_explore_area");
-    if (!geo.success || !geo.data) throw new Error(geo.error || "Geocode failed");
-    const { lat, lng } = geo.data.location;
+    const resolved = await this.resolveLocation(params.location, "maps_explore_area");
+    const { lat, lng } = resolved;
 
     // 2. Search each type
     const categories: any[] = [];
@@ -568,7 +663,7 @@ export class PlacesSearcher {
     return {
       success: true,
       data: {
-        location: { address: geo.data.formatted_address, lat, lng },
+        location: { address: resolved.address, lat, lng },
         radius,
         categories,
       },
@@ -614,7 +709,7 @@ export class PlacesSearcher {
     const destination = stops[stops.length - 1];
     const intermediates = stops.length > 2 ? stops.slice(1, -1) : undefined;
     // Waypoint ordering is a higher-tier Routes option and is opt-in.
-    const shouldOptimize = params.optimize === true && stops.length > 2;
+    const shouldOptimize = params.optimize === true && stops.length > 3;
 
     const routeResult = await this.routesService.computeRoutes({
       origin,

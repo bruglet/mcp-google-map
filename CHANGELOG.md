@@ -1,5 +1,81 @@
 # Changelog
 
+## 0.0.69
+
+- feat: package Claude Code plugin (#101)
+
+
+## 0.0.68
+
+- docs: reposition project README (#100)
+
+
+## 0.0.67
+
+- docs: clarify plugin setup and runtime (#99)
+
+
+## 0.0.66
+
+- docs: clarify Codex Plugin installation, runtime loading, diagnostics, and MCP alternatives
+- docs: align English and Traditional Chinese onboarding
+
+
+## 0.0.65
+
+- feat: split plugin into focused map skills (#98)
+
+
+## 0.0.64
+
+- feat: package CLI skill as installable plugin (#97)
+
+
+## 0.0.63
+
+- Preserve Places attributions and refresh trust guidance (#96)
+
+
+## 0.0.62
+
+- Productize standalone Google Maps Agent Skill and exec CLI (#95)
+
+
+## 0.0.61
+
+- test: remove temporary release fingerprint probe
+- fix: safely resume partially published releases
+- ci: verify declared Node 18 support
+
+
+## 0.0.60
+
+- fix: publish latest Docker image only after release
+
+
+## 0.0.59
+
+- fix: skip duplicate release events for tagged main
+
+
+## 0.0.58
+
+- fix: preserve per-session API keys with a server default
+
+
+## 0.0.57
+
+- fix: harden GHCR image publishing
+- ci: build and publish Docker image to GHCR
+
+
+## 0.0.56
+
+- test: skip live place photos without API key
+- test: cover waypoint threshold in CI
+- fix: require at least 2 intermediates for waypoint optimization
+- fix: route plan_route stops by resolved waypoints and add text-search fallback
+
 ## 0.0.55
 
 - fix: restore broken star history chart (#84)
@@ -54,6 +130,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+- Split the Skill-only plugin into focused general maps, travel planning, and local SEO Skills with shared setup and attribution guidance.
+- Add a non-billable `doctor` readiness check and opt-in `doctor --live` checks for Geocoding, Places API (New), and Routes API.
 
 ## [0.0.48]
 

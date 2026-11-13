@@ -84,7 +84,7 @@ jobs:
           labels: ${{ steps.metadata.outputs.labels }}
           build-args: |
             VCS_REF=${{ github.sha }}
-            UPSTREAM_BASE_COMMIT=be966cc
+            UPSTREAM_BASE_COMMIT=47248ea
             IMAGE_CREATED=${{ github.event.head_commit.timestamp || github.event.pull_request.updated_at }}
           cache-from: type=gha,scope=mcp-google-map
           cache-to: type=gha,mode=max,scope=mcp-google-map
@@ -200,7 +200,7 @@ jobs:
           labels: ${{ steps.metadata.outputs.labels }}
           build-args: |
             VCS_REF=${{ github.sha }}
-            UPSTREAM_BASE_COMMIT=be966cc
+            UPSTREAM_BASE_COMMIT=47248ea
             IMAGE_CREATED=${{ github.event.head_commit.timestamp }}
           cache-from: type=gha,scope=mcp-google-map
           cache-to: type=gha,mode=max,scope=mcp-google-map

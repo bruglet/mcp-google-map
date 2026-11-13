@@ -5,7 +5,7 @@ import { PlaceFieldGroup } from "../../services/costPolicy.js";
 
 const NAME = "maps_place_details";
 const DESCRIPTION =
-  "Get requested details for one known Google Place ID, returning basic identity, address, coordinates, type, and a Maps URL by default. Use after a search or resolver provides a Place ID; do not use it to discover candidates. Optional contact, hours, ratings, price, reviews, accessibility, amenities, parking, and AI summaries increase the billing tier, so request only data needed for the answer. Cost: T1-T4 | Fan-out: S.";
+  "Get requested details for one known Google Place ID, returning basic identity, address, coordinates, type, and a Maps URL by default. Use after a search or resolver provides a Place ID; do not use it to discover candidates. Optional contact, hours, ratings, price, reviews, accessibility, amenities, parking, and AI summaries increase the billing tier, so request only data needed for the answer. Reviews and AI summaries include source/disclosure metadata that must accompany end-user display. Cost: T1-T4 | Fan-out: S.";
 
 const SCHEMA = {
   placeId: z
